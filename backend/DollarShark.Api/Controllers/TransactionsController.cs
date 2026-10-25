@@ -1,9 +1,11 @@
 using DollarShark.Application.Transactions;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DollarShark.Api.Controllers;
 
 [Route("api/transactions")]
+[Authorize]
 public sealed class TransactionsController(ITransactionService service) : ApiControllerBase
 {
     [HttpGet]

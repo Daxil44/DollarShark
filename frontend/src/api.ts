@@ -2,7 +2,24 @@ import axios from 'axios';
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:5017',
+  withCredentials: true,
   headers: { Accept: 'application/json' },
+});
+
+let csrfRequestToken: string | null = null;
+
+export async function refreshCsrfToken(): Promise<void> {
+  const response = await api.get<{ requestToken: string }>('/api/auth/csrf');
+  csrfRequestToken = response.data.requestToken;
+}
+
+api.interceptors.request.use(async config => {
+  const method = (config.method ?? 'get').toLowerCase();
+  if (!['get', 'head', 'options', 'trace'].includes(method)) {
+    if (!csrfRequestToken) await refreshCsrfToken();
+    config.headers.set('X-CSRF-TOKEN', csrfRequestToken!);
+  }
+  return config;
 });
 
 export function apiErrorMessage(error: unknown): string {

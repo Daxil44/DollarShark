@@ -4,7 +4,7 @@ using DollarShark.Domain;
 namespace DollarShark.Application.Categories;
 
 public sealed record CategoryRequest(string? Name, Guid? ParentCategoryId);
-public sealed record CategoryDto(Guid Id, string Name, Guid? ParentCategoryId, string? ParentCategoryName, int TransactionCount, int ChildCount);
+public sealed record CategoryDto(Guid Id, string Name, Guid? ParentCategoryId, string? ParentCategoryName, int TransactionCount, int ChildCount, bool IsSystem);
 
 public interface ICategoryRepository
 {
@@ -100,7 +100,7 @@ public sealed class CategoryService(ICategoryRepository repository) : ICategoryS
     }
 
     private static CategoryDto ToDto(Category category) =>
-        new(category.Id, category.Name, category.ParentCategoryId, category.ParentCategory?.Name, category.Transactions.Count, category.Children.Count);
+        new(category.Id, category.Name, category.ParentCategoryId, category.ParentCategory?.Name, category.Transactions.Count, category.Children.Count, category.IsSystem);
 
     private static IReadOnlyDictionary<string, string[]> Error(string key, string message) =>
         new Dictionary<string, string[]> { [key] = [message] };

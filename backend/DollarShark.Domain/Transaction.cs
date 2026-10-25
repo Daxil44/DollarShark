@@ -3,6 +3,7 @@ namespace DollarShark.Domain;
 public sealed class Transaction
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public string? UserId { get; set; }
     public Guid FinancialAccountId { get; set; }
     public FinancialAccount FinancialAccount { get; set; } = null!;
     public Guid? CategoryId { get; set; }

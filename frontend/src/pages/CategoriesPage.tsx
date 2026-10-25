@@ -89,7 +89,7 @@ export default function CategoriesPage() {
           <thead><tr><th>Name</th><th>Parent</th><th>Transactions</th><th className="text-end">Actions</th></tr></thead>
           <tbody>{categories.map(category => <tr key={category.id}>
             <td><strong>{category.name}</strong></td><td>{category.parentCategoryName ?? '—'}</td><td>{category.transactionCount}</td>
-            <td className="text-end text-nowrap"><Button size="sm" variant="outline-secondary" className="me-2" onClick={() => openEdit(category)}>Edit</Button><Button size="sm" variant="outline-danger" disabled={category.transactionCount > 0 || category.childCount > 0} title={category.transactionCount > 0 || category.childCount > 0 ? 'Remove transactions or child categories first.' : undefined} onClick={() => void remove(category)}>Delete</Button></td>
+            <td className="text-end text-nowrap">{category.isSystem ? <span className="badge text-bg-light">Shared default</span> : <><Button size="sm" variant="outline-secondary" className="me-2" onClick={() => openEdit(category)}>Edit</Button><Button size="sm" variant="outline-danger" disabled={category.transactionCount > 0 || category.childCount > 0} title={category.transactionCount > 0 || category.childCount > 0 ? 'Remove transactions or child categories first.' : undefined} onClick={() => void remove(category)}>Delete</Button></>}</td>
           </tr>)}</tbody>
         </Table>}
     </div>

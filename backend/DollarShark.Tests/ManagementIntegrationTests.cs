@@ -1,6 +1,8 @@
 using DollarShark.Application.Accounts;
 using DollarShark.Application.Categories;
+using DollarShark.Application.Common;
 using DollarShark.Application.Transactions;
+using DollarShark.Infrastructure.Identity;
 using DollarShark.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -15,7 +17,7 @@ public sealed class ManagementIntegrationTests
     public async Task AccountCreationValidatesFieldsAndDeactivationPreservesAccount()
     {
         await using var db = await TestDatabase.CreateAsync();
-        var service = new AccountService(new FinanceRepository(db.Context));
+        var service = new AccountService(new FinanceRepository(db.Context, new TestCurrentUser()));
 
         var invalid = await service.CreateAsync(new AccountRequest("", "", "Investment", "CAD", "123"), Ct);
         Assert.Equal(400, invalid.StatusCode);
@@ -36,7 +38,7 @@ public sealed class ManagementIntegrationTests
     public async Task CategoryCreateValidatesNamesAndRejectsDuplicates()
     {
         await using var db = await TestDatabase.CreateAsync();
-        var service = new CategoryService(new FinanceRepository(db.Context));
+        var service = new CategoryService(new FinanceRepository(db.Context, new TestCurrentUser()));
 
         var invalid = await service.CreateAsync(new CategoryRequest("  ", null), Ct);
         Assert.Equal(400, invalid.StatusCode);
@@ -51,7 +53,7 @@ public sealed class ManagementIntegrationTests
     public async Task TransactionRequiresExistingReferencesAndAmountTypeAgreement()
     {
         await using var db = await TestDatabase.CreateAsync();
-        var repo = new FinanceRepository(db.Context);
+        var repo = new FinanceRepository(db.Context, new TestCurrentUser());
         var accounts = new AccountService(repo);
         var categories = new CategoryService(repo);
         var transactions = new TransactionService(repo);
@@ -81,7 +83,7 @@ public sealed class ManagementIntegrationTests
     public async Task TransactionFiltersSearchSortAndPaginateInRelationalStore()
     {
         await using var db = await TestDatabase.CreateAsync();
-        var repo = new FinanceRepository(db.Context);
+        var repo = new FinanceRepository(db.Context, new TestCurrentUser());
         var accounts = new AccountService(repo);
         var transactions = new TransactionService(repo);
         var account = (await accounts.CreateAsync(new AccountRequest("Daily", "North Bank", "Chequing", "CAD", null), Ct)).Value!;
@@ -116,7 +118,7 @@ public sealed class ManagementIntegrationTests
     public async Task InvalidTransactionDateRangeAndPaginationAreRejected()
     {
         await using var db = await TestDatabase.CreateAsync();
-        var service = new TransactionService(new FinanceRepository(db.Context));
+        var service = new TransactionService(new FinanceRepository(db.Context, new TestCurrentUser()));
 
         var dateRange = await service.ListAsync(new TransactionListQuery
         {
@@ -134,7 +136,7 @@ public sealed class ManagementIntegrationTests
     public async Task CategoryCannotBeDeletedWhileInUseButCanAfterTransactionDeletion()
     {
         await using var db = await TestDatabase.CreateAsync();
-        var repo = new FinanceRepository(db.Context);
+        var repo = new FinanceRepository(db.Context, new TestCurrentUser());
         var accounts = new AccountService(repo);
         var categories = new CategoryService(repo);
         var transactions = new TransactionService(repo);
@@ -167,6 +169,16 @@ public sealed class ManagementIntegrationTests
             var options = new DbContextOptionsBuilder<FinanceDbContext>().UseSqlite(connection).Options;
             var context = new FinanceDbContext(options);
             await context.Database.EnsureCreatedAsync();
+            context.Users.Add(new ApplicationUser
+            {
+                Id = TestCurrentUser.Id,
+                UserName = "integration-test-user",
+                NormalizedUserName = "INTEGRATION-TEST-USER",
+                Email = "integration-test@example.test",
+                NormalizedEmail = "INTEGRATION-TEST@EXAMPLE.TEST",
+                EmailConfirmed = true
+            });
+            await context.SaveChangesAsync();
             return new TestDatabase(connection, context);
         }
 
@@ -175,6 +187,12 @@ public sealed class ManagementIntegrationTests
             await Context.DisposeAsync();
             await connection.DisposeAsync();
         }
+    }
+
+    private sealed class TestCurrentUser : ICurrentUserContext
+    {
+        public const string Id = "integration-test-user";
+        public string UserId => Id;
     }
 }
 

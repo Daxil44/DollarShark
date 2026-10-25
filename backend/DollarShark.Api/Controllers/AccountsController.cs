@@ -1,9 +1,11 @@
 using DollarShark.Application.Accounts;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DollarShark.Api.Controllers;
 
 [Route("api/accounts")]
+[Authorize]
 public sealed class AccountsController(IAccountService service) : ApiControllerBase
 {
     [HttpGet]

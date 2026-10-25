@@ -2,6 +2,8 @@ namespace DollarShark.Domain;
 public sealed class Category
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    public string? UserId { get; set; }
+    public bool IsSystem { get; set; }
     public string Name { get; set; } = string.Empty;
     public Guid? ParentCategoryId { get; set; }
     public Category? ParentCategory { get; set; }

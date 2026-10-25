@@ -1,22 +1,49 @@
-import { Container, Nav, Navbar, Card, Col, Row } from 'react-bootstrap';
-import { Link, NavLink, Route, Routes } from 'react-router-dom';
+import { useState } from 'react';
+import { Alert, Button, Container, Nav, Navbar, Spinner } from 'react-bootstrap';
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { apiErrorMessage } from './api';
+import { useAuth } from './auth';
 import AccountsPage from './pages/AccountsPage';
+import AuthPage from './pages/AuthPage';
 import CategoriesPage from './pages/CategoriesPage';
 import TransactionsPage from './pages/TransactionsPage';
+import StatementsPage from './pages/StatementsPage';
 import './App.css';
 
 function Overview() {
   return <>
     <div className="page-heading"><div><div className="eyebrow">YOUR MONEY, AT A GLANCE</div><h1>DollarShark</h1><p className="text-secondary mb-0">Manage your accounts, organize categories, and record transactions.</p></div></div>
-    <Row className="g-3">
-      <Col md={4}><Card className="content-card h-100"><Card.Body><h2 className="section-title">Accounts</h2><p className="text-secondary">Create and manage your financial accounts.</p><Link to="/accounts" className="btn btn-outline-dark">Open accounts</Link></Card.Body></Card></Col>
-      <Col md={4}><Card className="content-card h-100"><Card.Body><h2 className="section-title">Categories</h2><p className="text-secondary">Organize activity with editable categories.</p><Link to="/categories" className="btn btn-outline-dark">Open categories</Link></Card.Body></Card></Col>
-      <Col md={4}><Card className="content-card h-100"><Card.Body><h2 className="section-title">Transactions</h2><p className="text-secondary">Record, filter, and update transactions.</p><Link to="/transactions" className="btn btn-outline-dark">Open transactions</Link></Card.Body></Card></Col>
-    </Row>
+    <div className="row g-3">
+      <div className="col-md-4"><div className="content-card h-100 p-4"><h2 className="section-title">Accounts</h2><p className="text-secondary">Create and manage your financial accounts.</p><Link to="/accounts" className="btn btn-outline-dark">Open accounts</Link></div></div>
+      <div className="col-md-4"><div className="content-card h-100 p-4"><h2 className="section-title">Categories</h2><p className="text-secondary">Organize activity with personal and shared categories.</p><Link to="/categories" className="btn btn-outline-dark">Open categories</Link></div></div>
+      <div className="col-md-4"><div className="content-card h-100 p-4"><h2 className="section-title">Transactions</h2><p className="text-secondary">Record, filter, and update transactions.</p><Link to="/transactions" className="btn btn-outline-dark">Open transactions</Link></div></div>
+    </div>
   </>;
 }
 
-export default function App() {
+function ProtectedApp() {
+  const { user, checking, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [error, setError] = useState('');
+  const [signingOut, setSigningOut] = useState(false);
+
+  if (checking) return <div className="auth-loading"><Spinner animation="border" role="status"><span className="visually-hidden">Checking session…</span></Spinner></div>;
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+
+  async function signOut() {
+    setError('');
+    setSigningOut(true);
+    try {
+      await logout();
+      navigate('/login', { replace: true });
+    } catch (logoutError) {
+      setError(apiErrorMessage(logoutError));
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
   return <div className="app-shell">
     <Navbar expand="lg" className="topbar"><Container>
       <Navbar.Brand as={Link} to="/" className="brand"><span className="brand-mark">$</span> DollarShark</Navbar.Brand>
@@ -26,17 +53,28 @@ export default function App() {
         <Nav.Link as={NavLink} to="/accounts">Accounts</Nav.Link>
         <Nav.Link as={NavLink} to="/categories">Categories</Nav.Link>
         <Nav.Link as={NavLink} to="/transactions">Transactions</Nav.Link>
-      </Nav><span className="local-label"><span className="status-dot" /> Local workspace</span></Navbar.Collapse>
+        <Nav.Link as={NavLink} to="/statements">Statements</Nav.Link>
+      </Nav><div className="user-controls"><span className="local-label"><span className="status-dot" />{user.email}</span><Button size="sm" variant="outline-secondary" onClick={() => void signOut()} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</Button></div></Navbar.Collapse>
     </Container></Navbar>
     <main><Container className="main-content">
+      {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
       <Routes>
         <Route path="/" element={<Overview />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/transactions" element={<TransactionsPage />} />
-        <Route path="*" element={<Overview />} />
+        <Route path="/statements" element={<StatementsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       <footer>DollarShark <span>·</span> Personal finance, made clearer.</footer>
     </Container></main>
   </div>;
+}
+
+export default function App() {
+  return <Routes>
+    <Route path="/login" element={<AuthPage mode="login" />} />
+    <Route path="/register" element={<AuthPage mode="register" />} />
+    <Route path="*" element={<ProtectedApp />} />
+  </Routes>;
 }

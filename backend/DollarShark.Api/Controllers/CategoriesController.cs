@@ -1,9 +1,11 @@
 using DollarShark.Application.Categories;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DollarShark.Api.Controllers;
 
 [Route("api/categories")]
+[Authorize]
 public sealed class CategoriesController(ICategoryService service) : ApiControllerBase
 {
     [HttpGet]

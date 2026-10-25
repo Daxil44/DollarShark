@@ -24,6 +24,7 @@ export type Category = {
   parentCategoryName: string | null;
   transactionCount: number;
   childCount: number;
+  isSystem: boolean;
 };
 
 export type CategoryInput = {
@@ -56,6 +57,26 @@ export type TransactionInput = {
 
 export type TransactionPage = {
   items: Transaction[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+};
+
+export type StatementImport = {
+  id: string;
+  financialAccountId: string;
+  accountName: string;
+  originalFileName: string;
+  fileSizeBytes: number;
+  contentType: string;
+  status: string;
+  uploadedAtUtc: string;
+  processedAtUtc: string | null;
+};
+
+export type StatementImportPage = {
+  items: StatementImport[];
   page: number;
   pageSize: number;
   totalCount: number;
