@@ -31,12 +31,17 @@ builder.Services.AddScoped<ITransactionRepository>(sp => sp.GetRequiredService<F
 builder.Services.AddScoped<IStatementImportService, StatementImportService>();
 builder.Services.AddScoped<IStatementImportRepository, StatementImportRepository>();
 builder.Services.AddScoped<IStatementFileValidator, StatementFileValidator>();
+builder.Services.AddScoped<IStatementCsvParser, StatementCsvParser>();
 builder.Services.AddScoped<IStatementStorage, LocalPrivateStatementStorage>();
 
 var maxStatementSizeBytes = builder.Configuration.GetValue<long>("StatementStorage:MaxFileSizeBytes", 15 * 1024 * 1024);
 if (maxStatementSizeBytes is < 1 or > 1024L * 1024 * 1024)
     throw new InvalidOperationException("StatementStorage:MaxFileSizeBytes must be between 1 byte and 1 GiB.");
 builder.Services.AddSingleton(new StatementUploadOptions { MaxFileSizeBytes = maxStatementSizeBytes });
+var maxStatementCsvRows = builder.Configuration.GetValue<int>("StatementCsv:MaxRows", 10_000);
+if (maxStatementCsvRows is < 1 or > 100_000)
+    throw new InvalidOperationException("StatementCsv:MaxRows must be between 1 and 100000.");
+builder.Services.AddSingleton(new StatementCsvParsingOptions { MaxRows = maxStatementCsvRows });
 builder.Services.Configure<StatementStorageOptions>(builder.Configuration.GetSection("StatementStorage"));
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = maxStatementSizeBytes + 1024 * 1024);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = maxStatementSizeBytes + 1024 * 1024);

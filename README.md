@@ -55,8 +55,16 @@ Open http://localhost:5173. The checked-in development environment file points t
 - PDF, CSV, and XLSX files are checked by extension and basic file structure; the submitted Content-Type is ignored. The default maximum is 15 MiB (`StatementStorage:MaxFileSizeBytes` can override it).
 - Files are stored outside `wwwroot` under the current user's Local Application Data at `DollarShark/Statements`. Set `StatementStorage:RootPath` to choose another private directory. The API refuses a configured storage location inside the public web root.
 - The app generates random storage keys and stores a SHA-256 hash plus metadata in SQL Server. Failed metadata writes attempt to remove the stored file. Deletes use a retryable `Deleting` status so a failed file or database deletion can be retried.
-- Uploads are not parsed and do not create transactions. Files are never served by the API in this phase.
+- Uploads are not parsed automatically. CSV files can be preview-parsed on demand; previews do not create transactions. Files are never served by the API.
 - Local storage is private to the operating-system account running the API, but files are not encrypted or malware-scanned by this milestone. Configure restrictive filesystem permissions, backups, and a trusted private volume before using real statements.
+
+## CSV preview parsing
+
+- `POST /api/statements/{id}/parse-csv` returns normalized candidate rows for an owned CSV statement. It is read-only: previews do not create transactions or change the statement status, and concurrent/repeated previews are safe.
+- The parser supports UTF-8 with or without BOM, quoted commas/escaped quotes, CRLF/LF, signed amounts or separate debit/credit columns. It recognizes common header aliases, but unknown institution-specific headers require a future mapping configuration; ambiguous mappings return a clear 422 error.
+- Date fields use explicit invariant formats (`yyyy-MM-dd`, `yyyy/MM/dd`, US `M/d/yyyy` and `M/d/yy`, `yyyyMMdd`, `d-MMM-yyyy`, `MMM d, yyyy`, or `MMMM d, yyyy`). Amounts use `.` as decimal separator, optional correctly grouped `,` thousands separators, up to four fractional digits, optional currency symbols, and parentheses or a leading sign for negatives. Debit values are normalized negative and credits positive; signed Amount values keep their sign.
+- Optional `StatementCsv:MaxRows` defaults to 10,000 (permitted configuration range 1–100,000). Parsing also enforces the configured statement file-size limit. Invalid values and wrong-width rows are returned with row diagnostics; empty files, invalid UTF-8, malformed quoting, missing/ambiguous columns, and limit violations return a clear error.
+- PDF and XLSX uploads remain stored but cannot be preview-parsed. CSV previews are temporary responses; they are not persisted.
 
 Email confirmation and password reset are deferred. Registration is open and currently has no email verification, recovery, MFA, or dedicated per-IP rate limit; do not treat this phase as ready for unrestricted public registration. Configure HTTPS, a production data-protection key store, exact frontend origin, database backups, and monitoring before exposing it publicly.
 
@@ -68,6 +76,7 @@ To create optional demo data for your own account, replace the email placeholder
 - Categories: GET /api/categories, GET /api/categories/{id}, POST /api/categories, PUT /api/categories/{id}, DELETE /api/categories/{id}
 - Transactions: GET /api/transactions, GET /api/transactions/{id}, POST /api/transactions, PUT /api/transactions/{id}, DELETE /api/transactions/{id}
 - Statements: POST /api/statements, GET /api/statements, GET /api/statements/{id}, DELETE /api/statements/{id}
+- CSV preview: POST /api/statements/{id}/parse-csv
 
 Transactions accept year, month, accountId, categoryId, transactionType, search, from, to, sortBy, sortDirection, page, and pageSize query parameters. Results include pagination metadata; page size is limited to 100.
 

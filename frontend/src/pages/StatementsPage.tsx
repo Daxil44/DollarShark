@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Alert, Badge, Button, Form, Pagination, Spinner, Table } from 'react-bootstrap';
 import { Link } from 'react-router-dom';
 import { api, apiErrorMessage } from '../api';
-import type { Account, StatementImport, StatementImportPage } from '../types';
+import type { Account, StatementCsvPreview, StatementImport, StatementImportPage } from '../types';
 
 const pageSize = 25;
 const emptyPage: StatementImportPage = { items: [], page: 1, pageSize, totalCount: 0, totalPages: 0 };
@@ -35,6 +35,8 @@ export default function StatementsPage() {
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [deletingId, setDeletingId] = useState('');
+  const [parsingId, setParsingId] = useState('');
+  const [csvPreview, setCsvPreview] = useState<{ statement: StatementImport; result: StatementCsvPreview } | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -105,6 +107,21 @@ export default function StatementsPage() {
     }
   }
 
+  async function parseCsv(statement: StatementImport) {
+    setError('');
+    setNotice('');
+    setCsvPreview(null);
+    setParsingId(statement.id);
+    try {
+      const response = await api.post<StatementCsvPreview>(`/api/statements/${statement.id}/parse-csv`);
+      setCsvPreview({ statement, result: response.data });
+    } catch (parseError) {
+      setError(apiErrorMessage(parseError));
+    } finally {
+      setParsingId('');
+    }
+  }
+
   const canUpload = !loadingAccounts && accounts.length > 0 && !!selectedAccount && !!file;
 
   return <>
@@ -123,7 +140,7 @@ export default function StatementsPage() {
             <Form.Group className="col-md-4"><Form.Label>Financial account</Form.Label><Form.Select required value={selectedAccount} onChange={event => setSelectedAccount(event.target.value)}>
               {accounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.institution}</option>)}
             </Form.Select></Form.Group>
-            <Form.Group className="col-md-5"><Form.Label>Statement file</Form.Label><Form.Control type="file" required accept=".pdf,.csv,.xlsx,application/pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => setFile((event.currentTarget as HTMLInputElement).files?.[0] ?? null)} /><Form.Text>PDF, CSV, or XLSX. File contents are stored privately and are not parsed in this phase.</Form.Text></Form.Group>
+            <Form.Group className="col-md-5"><Form.Label>Statement file</Form.Label><Form.Control type="file" required accept=".pdf,.csv,.xlsx,application/pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => setFile((event.currentTarget as HTMLInputElement).files?.[0] ?? null)} /><Form.Text>PDF, CSV, or XLSX. CSV files can be preview-parsed after upload; no transactions are created.</Form.Text></Form.Group>
             <div className="col-md-3"><Button type="submit" variant="dark" className="w-100" disabled={!canUpload || uploading}>{uploading ? <><Spinner size="sm" className="me-2" />Uploading…</> : 'Upload statement'}</Button></div>
           </div>
         </Form>}
@@ -141,9 +158,38 @@ export default function StatementsPage() {
             <td>{new Date(statement.uploadedAtUtc).toLocaleString()}</td>
             <td>{formatFileSize(statement.fileSizeBytes)}</td>
             <td><Badge bg={statusVariant(statement.status)}>{statement.status}</Badge></td>
-            <td className="text-end"><Button size="sm" variant="outline-danger" onClick={() => void remove(statement)} disabled={deletingId === statement.id}>{deletingId === statement.id ? 'Deleting…' : statement.status === 'Deleting' ? 'Retry delete' : 'Delete'}</Button></td>
+            <td className="text-end text-nowrap">
+              {statement.originalFileName.toLowerCase().endsWith('.csv') && statement.status !== 'Deleting' &&
+                <Button size="sm" variant="outline-primary" className="me-2" onClick={() => void parseCsv(statement)} disabled={!!parsingId || uploading || !!deletingId}>
+                  {parsingId === statement.id ? <><Spinner size="sm" className="me-1" />Parsing…</> : 'Parse CSV'}
+                </Button>}
+              <Button size="sm" variant="outline-danger" onClick={() => void remove(statement)} disabled={!!parsingId || deletingId === statement.id}>{deletingId === statement.id ? 'Deleting…' : statement.status === 'Deleting' ? 'Retry delete' : 'Delete'}</Button>
+            </td>
           </tr>)}</tbody>
         </Table>}
+      {csvPreview && <section className="mt-4" aria-label="CSV parse preview">
+        <div className="d-flex justify-content-between align-items-start gap-3 mb-3">
+          <div><h3 className="section-title mb-1">Preview: {csvPreview.statement.originalFileName}</h3><p className="text-secondary small mb-0">Parsed rows only. Nothing has been saved as a transaction.</p></div>
+          <Button variant="outline-secondary" size="sm" onClick={() => setCsvPreview(null)}>Close preview</Button>
+        </div>
+        <Alert variant={csvPreview.result.invalidRows > 0 ? 'warning' : 'success'}>
+          {csvPreview.result.validRows} valid row{csvPreview.result.validRows === 1 ? '' : 's'} and {csvPreview.result.invalidRows} invalid row{csvPreview.result.invalidRows === 1 ? '' : 's'}.
+        </Alert>
+        {csvPreview.result.candidates.length === 0 ? <p className="text-secondary">The CSV contains no transaction rows.</p> :
+          <Table responsive bordered size="sm" className="align-middle mb-0">
+            <thead><tr><th>Source row</th><th>Transaction date</th><th>Description</th><th className="text-end">Amount</th><th>Currency</th><th>Status and validation</th></tr></thead>
+            <tbody>{csvPreview.result.candidates.map(candidate => <tr key={candidate.sourceRowNumber}>
+              <td>{candidate.sourceRowNumber}</td>
+              <td>{candidate.transactionDate ?? '—'}{candidate.postedDate && <div className="small text-secondary">Posted: {candidate.postedDate}</div>}</td>
+              <td>{candidate.description || '—'}{candidate.referenceNumber && <div className="small text-secondary">Ref: {candidate.referenceNumber}</div>}</td>
+              <td className="text-end">{candidate.amount === null ? '—' : candidate.amount.toFixed(2)}</td>
+              <td>{candidate.currency ?? '—'}</td>
+              <td><Badge bg={candidate.status === 'Valid' ? 'success' : 'danger'}>{candidate.status}</Badge>
+                {candidate.validationMessages.length > 0 && <ul className="small text-danger mb-0 mt-1">{candidate.validationMessages.map((message, index) => <li key={`${candidate.sourceRowNumber}-${index}`}>{message}</li>)}</ul>}
+              </td>
+            </tr>)}</tbody>
+          </Table>}
+      </section>}
       {statements.totalPages > 1 && <Pagination className="justify-content-center mt-3 mb-0">
         <Pagination.Prev disabled={pageNumber <= 1 || loading} onClick={() => void loadStatements(pageNumber - 1)} />
         <Pagination.Item active>{pageNumber} / {statements.totalPages}</Pagination.Item>

@@ -10,6 +10,11 @@ public sealed class StatementUploadOptions
     public long MaxFileSizeBytes { get; set; } = 15 * 1024 * 1024;
 }
 
+public sealed class StatementCsvParsingOptions
+{
+    public int MaxRows { get; set; } = 10_000;
+}
+
 public sealed record StatementUploadCommand(Guid FinancialAccountId, string OriginalFileName, long FileSizeBytes, Stream Content);
 public sealed record StatementStorageResult(string StorageKey, long FileSizeBytes, string ContentType, string FileHash);
 public sealed record StatementImportDto(
@@ -17,6 +22,23 @@ public sealed record StatementImportDto(
     long FileSizeBytes, string ContentType, string Status, DateTime UploadedAtUtc, DateTime? ProcessedAtUtc);
 public sealed record StatementImportPage(
     IReadOnlyList<StatementImportDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
+public sealed record StatementCsvCandidate(
+    int SourceRowNumber,
+    DateOnly? TransactionDate,
+    DateOnly? PostedDate,
+    string Description,
+    decimal? Amount,
+    string? Currency,
+    string? ReferenceNumber,
+    IReadOnlyList<string> ValidationMessages,
+    string Status);
+public sealed record StatementCsvPreview(
+    IReadOnlyList<StatementCsvCandidate> Candidates,
+    int ValidRows,
+    int InvalidRows);
+
+public sealed class StatementCsvFormatException(string message) : Exception(message);
+public sealed class StatementCsvRowLimitException(int maxRows) : Exception($"The CSV exceeds the maximum of {maxRows} data rows.");
 
 public interface IStatementFileValidator
 {
@@ -26,7 +48,13 @@ public interface IStatementFileValidator
 public interface IStatementStorage
 {
     Task<StatementStorageResult> StoreAsync(Stream content, string extension, long maxFileSizeBytes, CancellationToken cancellationToken);
+    Task<Stream> OpenReadAsync(string storageKey, CancellationToken cancellationToken);
     Task DeleteAsync(string storageKey, CancellationToken cancellationToken);
+}
+
+public interface IStatementCsvParser
+{
+    Task<StatementCsvPreview> ParseAsync(Stream content, int maxRows, CancellationToken cancellationToken);
 }
 
 public interface IStatementImportRepository
@@ -47,14 +75,17 @@ public interface IStatementImportService
     Task<UseCaseResult<StatementImportPage>> ListAsync(int page, int pageSize, CancellationToken cancellationToken);
     Task<UseCaseResult<StatementImportDto>> GetAsync(Guid id, CancellationToken cancellationToken);
     Task<UseCaseResult<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken);
+    Task<UseCaseResult<StatementCsvPreview>> ParseCsvAsync(Guid id, CancellationToken cancellationToken);
 }
 
 public sealed class StatementImportService(
     ICurrentUserContext currentUser,
     IStatementImportRepository repository,
     IStatementFileValidator validator,
+    IStatementCsvParser csvParser,
     IStatementStorage storage,
     StatementUploadOptions options,
+    StatementCsvParsingOptions csvOptions,
     ILogger<StatementImportService> logger) : IStatementImportService
 {
     private const int MaxFileNameLength = 255;
@@ -162,6 +193,45 @@ public sealed class StatementImportService(
         repository.Delete(statement);
         await repository.SaveChangesAsync(cancellationToken);
         return UseCaseResult<bool>.NoContent(true);
+    }
+
+    public async Task<UseCaseResult<StatementCsvPreview>> ParseCsvAsync(Guid id, CancellationToken cancellationToken)
+    {
+        if (id == Guid.Empty)
+            return UseCaseResult<StatementCsvPreview>.Invalid(Error("id", "A valid statement ID is required."));
+
+        var statement = await repository.GetTrackedAsync(id, RequireUserId(), cancellationToken);
+        if (statement is null) return UseCaseResult<StatementCsvPreview>.NotFound("Statement was not found.");
+        if (!string.Equals(Path.GetExtension(statement.OriginalFileName), ".csv", StringComparison.OrdinalIgnoreCase))
+            return new UseCaseResult<StatementCsvPreview>(null, StatusCodes.Status415UnsupportedMediaType, "Only CSV statements can be parsed.");
+        if (statement.Status == StatementImportStatus.Deleting)
+            return UseCaseResult<StatementCsvPreview>.Conflict("This statement is being deleted and cannot be parsed.");
+        if (statement.FileSizeBytes <= 0 || statement.FileSizeBytes > options.MaxFileSizeBytes)
+            return new UseCaseResult<StatementCsvPreview>(null, StatusCodes.Status413PayloadTooLarge, "The statement file exceeds the configured size limit.");
+
+        try
+        {
+            await using var content = await storage.OpenReadAsync(statement.StorageKey, cancellationToken);
+            if (content.CanSeek && content.Length > options.MaxFileSizeBytes)
+                return new UseCaseResult<StatementCsvPreview>(null, StatusCodes.Status413PayloadTooLarge, "The statement file exceeds the configured size limit.");
+            return UseCaseResult<StatementCsvPreview>.Ok(await csvParser.ParseAsync(content, csvOptions.MaxRows, cancellationToken));
+        }
+        catch (FileNotFoundException)
+        {
+            return UseCaseResult<StatementCsvPreview>.Conflict("The stored statement file is unavailable. Upload the file again.");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return UseCaseResult<StatementCsvPreview>.Conflict("The stored statement file is unavailable. Upload the file again.");
+        }
+        catch (StatementCsvFormatException exception)
+        {
+            return new UseCaseResult<StatementCsvPreview>(null, StatusCodes.Status422UnprocessableEntity, exception.Message);
+        }
+        catch (StatementCsvRowLimitException exception)
+        {
+            return new UseCaseResult<StatementCsvPreview>(null, StatusCodes.Status413PayloadTooLarge, exception.Message);
+        }
     }
 
     private string RequireUserId() => string.IsNullOrWhiteSpace(currentUser.UserId)
