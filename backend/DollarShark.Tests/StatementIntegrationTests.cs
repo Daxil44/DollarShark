@@ -133,6 +133,70 @@ public sealed class StatementIntegrationTests
     }
 
     [Fact]
+    public async Task AnonymousUsersCannotParseStatements()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await client.PostAsync($"/api/statements/{Guid.NewGuid()}/parse-csv", new StringContent(string.Empty))).StatusCode);
+    }
+
+    [Fact]
+    public async Task CsvParsingIsOwnerScopedRepeatableAndDoesNotCreateTransactionsOrChangeStatus()
+    {
+        await using var factory = new StatementApiFactory();
+        using var userA = factory.CreateClient();
+        using var userB = factory.CreateClient();
+        var (csrfA, accountA) = await RegisterAndCreateAccount(userA, "parse-a@example.test");
+        var (csrfB, accountB) = await RegisterAndCreateAccount(userB, "parse-b@example.test");
+        var csv = Encoding.UTF8.GetBytes("Date,Description,Amount,Currency\n2026-01-05,\"Coffee, shop\",-4.25,CAD\n");
+        var createdCsv = await Upload(userB, accountB, "bank.csv", csv, csrfB);
+        var csvStatement = (await createdCsv.Content.ReadFromJsonAsync<StatementDto>())!;
+        var createdPdf = await Upload(userA, accountA, "bank.pdf", PdfBytes, csrfA);
+        var pdfStatement = (await createdPdf.Content.ReadFromJsonAsync<StatementDto>())!;
+
+        Assert.Equal(HttpStatusCode.NotFound, (await ParseCsv(userA, csvStatement.Id, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, (await ParseCsv(userA, pdfStatement.Id, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await ParseCsv(userB, csvStatement.Id, null)).StatusCode);
+
+        var repeated = await Task.WhenAll(ParseCsv(userB, csvStatement.Id, csrfB), ParseCsv(userB, csvStatement.Id, csrfB));
+        Assert.All(repeated, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        using var previewJson = JsonDocument.Parse(await repeated[0].Content.ReadAsStringAsync());
+        var preview = previewJson.RootElement;
+        Assert.Equal(1, preview.GetProperty("validRows").GetInt32());
+        Assert.Equal(0, preview.GetProperty("invalidRows").GetInt32());
+        Assert.Equal("Coffee, shop", preview.GetProperty("candidates")[0].GetProperty("description").GetString());
+        Assert.Equal(-4.25m, preview.GetProperty("candidates")[0].GetProperty("amount").GetDecimal());
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+        Assert.Equal(0, await db.Transactions.CountAsync());
+        Assert.Equal(StatementImportStatus.Uploaded, (await db.StatementImports.SingleAsync(x => x.Id == csvStatement.Id)).Status);
+    }
+
+    [Fact]
+    public async Task CsvParsingHonorsConfiguredFileSizeLimit()
+    {
+        await using var factory = new StatementApiFactory(maxFileSizeBytes: 1_000);
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "parse-size@example.test");
+        var csv = Encoding.UTF8.GetBytes("Date,Description,Amount\n2026-01-05,Coffee,-4.25\n");
+        var created = await Upload(client, accountId, "bank.csv", csv, csrf);
+        var statement = (await created.Content.ReadFromJsonAsync<StatementDto>())!;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+            var row = await db.StatementImports.SingleAsync(x => x.Id == statement.Id);
+            row.FileSizeBytes = 1_001;
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Equal((HttpStatusCode)413, (await ParseCsv(client, statement.Id, csrf)).StatusCode);
+    }
+
+    [Fact]
     public async Task FailedFileDeletionIsRetryableAndDoesNotExposeTheStoredFile()
     {
         await using var factory = new StatementApiFactory();
@@ -236,6 +300,16 @@ public sealed class StatementIntegrationTests
         return await client.SendAsync(request);
     }
 
+    private static async Task<HttpResponseMessage> ParseCsv(HttpClient client, Guid id, string? csrf)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/statements/{id}/parse-csv")
+        {
+            Content = new StringContent(string.Empty)
+        };
+        if (csrf is not null) request.Headers.Add("X-CSRF-TOKEN", csrf);
+        return await client.SendAsync(request);
+    }
+
     private static byte[] CreateMinimalXlsx()
     {
         using var output = new MemoryStream();
@@ -326,6 +400,9 @@ public sealed class StatementIntegrationTests
     {
         public Task<DollarShark.Application.Statements.StatementStorageResult> StoreAsync(Stream content, string extension, long maxFileSizeBytes, CancellationToken cancellationToken) =>
             inner.StoreAsync(content, extension, maxFileSizeBytes, cancellationToken);
+
+        public Task<Stream> OpenReadAsync(string storageKey, CancellationToken cancellationToken) =>
+            inner.OpenReadAsync(storageKey, cancellationToken);
 
         public Task DeleteAsync(string storageKey, CancellationToken cancellationToken)
         {

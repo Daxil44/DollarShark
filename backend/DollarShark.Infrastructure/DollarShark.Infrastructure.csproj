@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="CsvHelper" Version="33.1.0" />
     <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <ProjectReference Include="..\DollarShark.Application\DollarShark.Application.csproj" />
     <ProjectReference Include="..\DollarShark.Domain\DollarShark.Domain.csproj" />

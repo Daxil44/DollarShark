@@ -77,6 +77,14 @@ public sealed class LocalPrivateStatementStorage : IStatementStorage
         return Task.CompletedTask;
     }
 
+    public Task<Stream> OpenReadAsync(string storageKey, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Stream content = new FileStream(GetPath(storageKey), FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 81920, options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Task.FromResult(content);
+    }
+
     private string GetPath(string storageKey)
     {
         if (string.IsNullOrWhiteSpace(storageKey) || !SafeStorageKey.IsMatch(storageKey))

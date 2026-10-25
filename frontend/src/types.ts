@@ -82,3 +82,21 @@ export type StatementImportPage = {
   totalCount: number;
   totalPages: number;
 };
+
+export type StatementCsvCandidate = {
+  sourceRowNumber: number;
+  transactionDate: string | null;
+  postedDate: string | null;
+  description: string;
+  amount: number | null;
+  currency: string | null;
+  referenceNumber: string | null;
+  validationMessages: string[];
+  status: 'Valid' | 'Invalid';
+};
+
+export type StatementCsvPreview = {
+  candidates: StatementCsvCandidate[];
+  validRows: number;
+  invalidRows: number;
+};

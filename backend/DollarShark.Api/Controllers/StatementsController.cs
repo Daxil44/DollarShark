@@ -85,6 +85,25 @@ public sealed class StatementsController(
         }
     }
 
+    [HttpPost("{id:guid}/parse-csv")]
+    public async Task<IActionResult> ParseCsv(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await service.ParseCsvAsync(id, cancellationToken);
+            return result.IsSuccess ? Ok(result.Value) : Failure(result);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Statement CSV preview failed for the current user.");
+            return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "The CSV statement could not be previewed.");
+        }
+    }
+
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
