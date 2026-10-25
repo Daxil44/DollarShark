@@ -77,6 +77,9 @@ To create optional demo data for your own account, replace the email placeholder
 - Transactions: GET /api/transactions, GET /api/transactions/{id}, POST /api/transactions, PUT /api/transactions/{id}, DELETE /api/transactions/{id}
 - Statements: POST /api/statements, GET /api/statements, GET /api/statements/{id}, DELETE /api/statements/{id}
 - CSV preview: POST /api/statements/{id}/parse-csv
+- Dashboard: GET /api/dashboard/overview?from=YYYY-MM-DD&to=YYYY-MM-DD&recentLimit=8
+
+The dashboard endpoint defaults to the full current UTC calendar month. Supply both `from` and `to` for a custom inclusive date range. Full calendar months compare with the previous calendar month; other ranges compare with the immediately preceding range of the same number of days. Totals are returned separately per transaction currency; no currency conversion is performed. Negative non-transfer amounts contribute to positive-valued expense totals, positive non-transfer amounts (including refunds) contribute to income, and explicitly typed transfers are excluded from all cash-flow totals. Recent transactions are limited to the selected period and sorted newest first with a deterministic ID tie-breaker.
 
 Transactions accept year, month, accountId, categoryId, transactionType, search, from, to, sortBy, sortDirection, page, and pageSize query parameters. Results include pagination metadata; page size is limited to 100.
 

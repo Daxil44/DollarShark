@@ -100,3 +100,33 @@ export type StatementCsvPreview = {
   validRows: number;
   invalidRows: number;
 };
+
+export type DashboardCurrencySummary = {
+  currency: string;
+  income: number;
+  expenses: number;
+  netCashFlow: number;
+  previousIncome: number;
+  previousExpenses: number;
+  previousNetCashFlow: number;
+};
+
+export type DashboardRecentTransaction = {
+  id: string;
+  transactionDate: string;
+  description: string;
+  amount: number;
+  currency: string;
+  transactionType: string;
+  accountName: string;
+  categoryName: string | null;
+};
+
+export type DashboardOverview = {
+  periodStart: string;
+  periodEnd: string;
+  previousPeriodStart: string;
+  previousPeriodEnd: string;
+  currencies: DashboardCurrencySummary[];
+  recentTransactions: DashboardRecentTransaction[];
+};
