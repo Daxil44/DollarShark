@@ -1,0 +1,27 @@
+.app-shell { min-height: 100vh; color: #172c2b; }
+.topbar { min-height: 72px; background: #fff; border-bottom: 1px solid #e7eeeb; }
+.brand { color: #173d38 !important; font-weight: 750; letter-spacing: -.04em; font-size: 1.3rem; display: flex; gap: .55rem; align-items: center; }
+.brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: #d9f3e7; color: #167553; font-size: 1rem; }
+.topbar .nav-link { color: #62716f; font-weight: 550; margin-left: .5rem; }
+.topbar .nav-link.active, .topbar .nav-link:hover { color: #167553; }
+.local-label { color: #647471; font-size: .85rem; display: flex; align-items: center; gap: .45rem; }
+.status-dot { width: 8px; height: 8px; background: #42b883; border-radius: 50%; }
+.main-content { max-width: 1100px; padding-top: 3.25rem; }
+.page-heading { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+.page-heading h1 { font-size: 2rem; letter-spacing: -.045em; font-weight: 700; margin: .35rem 0 .4rem; }
+.eyebrow, .stat-label { color: #6c817b; font-size: .69rem; font-weight: 750; letter-spacing: .12em; }
+.btn-dark { background: #183f39; border-color: #183f39; border-radius: 9px; padding: .62rem 1rem; }
+.stat-card, .content-card { border: 1px solid #e5ece9; border-radius: 14px; box-shadow: 0 5px 18px rgba(27, 66, 56, .035); }
+.stat-card .card-body { padding: 1.25rem 1.35rem; }
+.stat-value { font-size: 2rem; font-weight: 700; letter-spacing: -.045em; margin-top: .55rem; }
+.stat-note { color: #7b8986; font-size: .83rem; margin-top: .2rem; }
+.content-card .card-body { padding: 1.4rem; }
+.section-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 .25rem; }
+.empty-state { text-align: center; padding: 3.2rem 1rem 3rem; border-top: 1px solid #eef2f0; }
+.empty-icon { width: 44px; height: 44px; display: grid; place-items: center; margin: 0 auto 1rem; border-radius: 14px; background: #e9f6f0; color: #288768; font-size: 1.4rem; }
+.empty-state h3 { font-size: 1rem; font-weight: 700; }
+.empty-state p { max-width: 410px; margin: 0 auto; font-size: .9rem; }
+.account-row { display:flex; justify-content:space-between; align-items:center; padding: 1rem .2rem; border-top: 1px solid #eef2f0; }
+footer { margin: 3rem 0 1.5rem; text-align:center; color:#87938f; font-size:.8rem; }
+footer span { padding: 0 .3rem; }
+@media (max-width: 576px) { .main-content { padding-top: 2rem; } .page-heading h1 { font-size:1.7rem; } .page-heading { align-items:flex-start; flex-direction:column; } }

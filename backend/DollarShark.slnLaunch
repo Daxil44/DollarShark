@@ -1,0 +1,15 @@
+[
+  {
+    "Name": "DollarShark Full Stack",
+    "Projects": [
+      {
+        "Path": "DollarShark.Api\\DollarShark.Api.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "..\\frontend\\DollarShark.Frontend.esproj",
+        "Action": "StartWithoutDebugging"
+      }
+    ]
+  }
+]

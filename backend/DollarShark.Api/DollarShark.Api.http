@@ -1,0 +1,6 @@
+@DollarShark.Api_HostAddress = http://localhost:5017
+
+GET {{DollarShark.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -1,0 +1,27 @@
+# Build outputs
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+
+# User-specific secrets and local configuration
+**/secrets.json
+appsettings.*.local.json
+
+# Node
+node_modules/
+dist/
+coverage/
+*.log
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+
+.tools/
