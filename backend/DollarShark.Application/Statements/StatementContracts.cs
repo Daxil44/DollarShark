@@ -2,6 +2,7 @@ using DollarShark.Application.Common;
 using DollarShark.Domain;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using DollarShark.Application.Transactions;
 
 namespace DollarShark.Application.Statements;
 
@@ -36,6 +37,18 @@ public sealed record StatementCsvPreview(
     IReadOnlyList<StatementCsvCandidate> Candidates,
     int ValidRows,
     int InvalidRows);
+public sealed record StatementImportCandidateChange(
+    int SourceRowNumber, bool Selected, DateOnly? TransactionDate, string? Description,
+    decimal? Amount, string? TransactionType, Guid? CategoryId);
+public sealed record StatementImportConfirmationRequest(IReadOnlyList<StatementImportCandidateChange>? Candidates);
+public sealed record StatementImportRejectedRow(int SourceRowNumber, IReadOnlyList<string> Messages);
+public sealed record StatementImportConfirmationResult(
+    int CreatedCount, int ExcludedCount, int RejectedCount, IReadOnlyList<StatementImportRejectedRow> RejectedRows);
+
+public interface IStatementImportTransaction : IAsyncDisposable
+{
+    Task CommitAsync(CancellationToken cancellationToken);
+}
 
 public sealed class StatementCsvFormatException(string message) : Exception(message);
 public sealed class StatementCsvRowLimitException(int maxRows) : Exception($"The CSV exceeds the maximum of {maxRows} data rows.");
@@ -65,6 +78,9 @@ public interface IStatementImportRepository
     Task<int> CountAsync(string userId, CancellationToken cancellationToken);
     Task<StatementImportDto?> GetAsync(Guid id, string userId, CancellationToken cancellationToken);
     Task<StatementImport?> GetTrackedAsync(Guid id, string userId, CancellationToken cancellationToken);
+    Task<string?> GetAccountCurrencyForUserAsync(Guid accountId, string userId, CancellationToken cancellationToken);
+    Task<bool> TryClaimForProcessingAsync(Guid id, string userId, CancellationToken cancellationToken);
+    Task<IStatementImportTransaction> BeginTransactionAsync(CancellationToken cancellationToken);
     void Delete(StatementImport statement);
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
@@ -76,6 +92,7 @@ public interface IStatementImportService
     Task<UseCaseResult<StatementImportDto>> GetAsync(Guid id, CancellationToken cancellationToken);
     Task<UseCaseResult<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken);
     Task<UseCaseResult<StatementCsvPreview>> ParseCsvAsync(Guid id, CancellationToken cancellationToken);
+    Task<UseCaseResult<StatementImportConfirmationResult>> ConfirmImportAsync(Guid id, StatementImportConfirmationRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class StatementImportService(
@@ -83,6 +100,7 @@ public sealed class StatementImportService(
     IStatementImportRepository repository,
     IStatementFileValidator validator,
     IStatementCsvParser csvParser,
+    ITransactionService transactionService,
     IStatementStorage storage,
     StatementUploadOptions options,
     StatementCsvParsingOptions csvOptions,
@@ -232,6 +250,100 @@ public sealed class StatementImportService(
         {
             return new UseCaseResult<StatementCsvPreview>(null, StatusCodes.Status413PayloadTooLarge, exception.Message);
         }
+    }
+
+    public async Task<UseCaseResult<StatementImportConfirmationResult>> ConfirmImportAsync(
+        Guid id, StatementImportConfirmationRequest request, CancellationToken cancellationToken)
+    {
+        if (id == Guid.Empty) return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("id", "A valid statement ID is required."));
+        var userId = RequireUserId();
+        var statement = await repository.GetTrackedAsync(id, userId, cancellationToken);
+        if (statement is null) return UseCaseResult<StatementImportConfirmationResult>.NotFound("Statement was not found.");
+        if (!string.Equals(Path.GetExtension(statement.OriginalFileName), ".csv", StringComparison.OrdinalIgnoreCase))
+            return new UseCaseResult<StatementImportConfirmationResult>(null, StatusCodes.Status415UnsupportedMediaType, "Only CSV statements can be imported.");
+        if (statement.Status != StatementImportStatus.Uploaded)
+            return UseCaseResult<StatementImportConfirmationResult>.Conflict("This statement has already been processed or cannot be imported in its current state.");
+        if (request.Candidates is null)
+            return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Candidate rows are required."));
+
+        StatementCsvPreview preview;
+        try
+        {
+            await using var content = await storage.OpenReadAsync(statement.StorageKey, cancellationToken);
+            preview = await csvParser.ParseAsync(content, csvOptions.MaxRows, cancellationToken);
+        }
+        catch (FileNotFoundException) { return UseCaseResult<StatementImportConfirmationResult>.Conflict("The stored statement file is unavailable. Upload the file again."); }
+        catch (DirectoryNotFoundException) { return UseCaseResult<StatementImportConfirmationResult>.Conflict("The stored statement file is unavailable. Upload the file again."); }
+        catch (StatementCsvFormatException exception) { return new UseCaseResult<StatementImportConfirmationResult>(null, StatusCodes.Status422UnprocessableEntity, exception.Message); }
+        catch (StatementCsvRowLimitException exception) { return new UseCaseResult<StatementImportConfirmationResult>(null, StatusCodes.Status413PayloadTooLarge, exception.Message); }
+
+        var sourceByNumber = preview.Candidates.ToDictionary(x => x.SourceRowNumber);
+        if (request.Candidates.Count != sourceByNumber.Count || request.Candidates.Select(x => x.SourceRowNumber).Distinct().Count() != request.Candidates.Count ||
+            request.Candidates.Any(x => !sourceByNumber.ContainsKey(x.SourceRowNumber)))
+            return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Submitted rows do not match the uploaded CSV. Parse the statement again and retry."));
+
+        var selected = request.Candidates.Where(x => x.Selected).ToArray();
+        if (selected.Length == 0)
+            return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Select at least one valid row to import."));
+
+        var currency = await repository.GetAccountCurrencyForUserAsync(statement.FinancialAccountId, userId, cancellationToken);
+        if (currency is null) return UseCaseResult<StatementImportConfirmationResult>.NotFound("The statement's financial account was not found.");
+        var rejected = new List<StatementImportRejectedRow>();
+        foreach (var candidate in selected)
+        {
+            var messages = new List<string>();
+            if (!sourceByNumber.TryGetValue(candidate.SourceRowNumber, out var source))
+                messages.Add("The selected row is not part of this statement.");
+            if (candidate.TransactionDate is null || candidate.TransactionDate.Value.Year < 1900 || candidate.TransactionDate > DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)))
+                messages.Add("Enter a valid transaction date no earlier than 1900 and no later than tomorrow.");
+            if (string.IsNullOrWhiteSpace(candidate.Description) || candidate.Description.Trim().Length > 300)
+                messages.Add("Description is required and must be at most 300 characters.");
+            if (candidate.Amount is null || candidate.Amount == 0 || decimal.Abs(candidate.Amount.Value) >= 1_000_000_000_000_000m || decimal.Round(candidate.Amount.Value, 4) != candidate.Amount.Value)
+                messages.Add("Amount must be nonzero, fit decimal(19,4), and have at most four decimal places.");
+            if (source?.Currency is not null && !string.Equals(source.Currency, currency, StringComparison.OrdinalIgnoreCase))
+                messages.Add($"The CSV currency ({source.Currency}) does not match the account currency ({currency}).");
+            if (candidate.Amount is decimal amount)
+            {
+                if (string.Equals(candidate.TransactionType, "Expense", StringComparison.OrdinalIgnoreCase) && amount >= 0)
+                    messages.Add("Expenses must have a negative amount.");
+                if ((string.Equals(candidate.TransactionType, "Income", StringComparison.OrdinalIgnoreCase) || string.Equals(candidate.TransactionType, "Refund", StringComparison.OrdinalIgnoreCase)) && amount <= 0)
+                    messages.Add("Income and refunds must have a positive amount.");
+            }
+            if (!Enum.TryParse<TransactionType>(candidate.TransactionType, true, out var transactionType) || !Enum.IsDefined(transactionType))
+                messages.Add("Choose Expense, Income, Refund, or Transfer for every selected row.");
+            if (messages.Count > 0) rejected.Add(new StatementImportRejectedRow(candidate.SourceRowNumber, messages.Distinct().ToArray()));
+        }
+        if (rejected.Count > 0)
+        {
+            var value = new StatementImportConfirmationResult(0, request.Candidates.Count - selected.Length, rejected.Count, rejected);
+            return new UseCaseResult<StatementImportConfirmationResult>(value, StatusCodes.Status422UnprocessableEntity, "Some selected rows need correction before they can be imported.");
+        }
+
+        await using var transaction = await repository.BeginTransactionAsync(cancellationToken);
+        if (!await repository.TryClaimForProcessingAsync(id, userId, cancellationToken))
+            return UseCaseResult<StatementImportConfirmationResult>.Conflict("This statement has already been processed or is being imported.");
+
+        statement.Status = StatementImportStatus.Processing;
+        foreach (var candidate in selected)
+        {
+            var create = await transactionService.CreateAsync(new TransactionRequest(
+                candidate.TransactionDate!.Value, candidate.Description, candidate.Amount!.Value,
+                candidate.TransactionType, statement.FinancialAccountId, candidate.CategoryId), cancellationToken);
+            if (!create.IsSuccess)
+            {
+                var messages = create.Errors?.SelectMany(x => x.Value).Distinct().ToArray() ?? [create.Title ?? "The transaction could not be saved."];
+                var value = new StatementImportConfirmationResult(0, request.Candidates.Count - selected.Length, 1,
+                    [new StatementImportRejectedRow(candidate.SourceRowNumber, messages)]);
+                return new UseCaseResult<StatementImportConfirmationResult>(value, StatusCodes.Status422UnprocessableEntity, "The import was rejected. No rows were saved.");
+            }
+        }
+
+        statement.Status = StatementImportStatus.Processed;
+        statement.ProcessedAtUtc = DateTime.UtcNow;
+        await repository.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return UseCaseResult<StatementImportConfirmationResult>.Ok(new StatementImportConfirmationResult(
+            selected.Length, request.Candidates.Count - selected.Length, 0, []));
     }
 
     private string RequireUserId() => string.IsNullOrWhiteSpace(currentUser.UserId)
