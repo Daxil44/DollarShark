@@ -1,78 +1,73 @@
 # DollarShark
 
-DollarShark is a local, single-user personal finance tracking MVP. Phase 1 establishes the backend, initial data model, and frontend shell. It does not include authentication, statement parsing, analytics, Telegram, or deployment. Do not expose the development API to untrusted networks.
+DollarShark is a local, single-user personal finance MVP. Phase 2 provides account, category, and transaction management. There is no authentication or multi-user security; keep the API bound to localhost and do not expose it to untrusted networks.
 
 ## Prerequisites
 
 - .NET 10 SDK
-- Node.js 20.19 or newer and npm (Node 22 LTS is recommended; the installed Node 20.5.1 is below the dependency toolchain minimum)
+- Node.js 20.19 or newer and npm (Node 22 LTS or newer recommended)
 - SQL Server Developer Edition running locally
 
-## Backend
+## Database setup
 
-1. Set a local-only SQL Server connection string using .NET User Secrets (this value is not committed):
+Set the SQL Server connection string in .NET User Secrets. Replace YOUR_SERVER\YOUR_INSTANCE with the server/instance shown by your SQL Server connection:
 
-   ```powershell
-   dotnet user-secrets set "ConnectionStrings:FinanceDb" "Server=localhost;Database=DollarShark;Trusted_Connection=True;TrustServerCertificate=True;" --project backend/DollarShark.Api
-   ```
+~~~powershell
+dotnet user-secrets set "ConnectionStrings:FinanceDb" "Server=YOUR_SERVER\YOUR_INSTANCE;Database=DollarShark;Trusted_Connection=True;TrustServerCertificate=True;" --project backend/DollarShark.Api
+~~~
 
-2. From the repository root, run the API:
+Apply the checked-in migrations explicitly. The Phase 2 migration adds TransactionType with a default of Expense for existing transaction rows and seeds the default categories. It preserves existing tables and data.
 
-   ```powershell
-   dotnet run --project backend/DollarShark.Api
-   ```
+~~~powershell
+.\.tools\dotnet-ef.exe database update --project backend/DollarShark.Infrastructure --startup-project backend/DollarShark.Api
+~~~
 
-   The development profile serves HTTP at `http://localhost:5017`. Check `http://localhost:5017/health`, `http://localhost:5017/api/accounts`, and the OpenAPI document at `http://localhost:5017/openapi/v1.json`. The accounts endpoint queries SQL Server and returns an empty array when there are no accounts, after the initial schema migration has been applied.
+The API does not update the database automatically.
 
-3. The initial migration is checked in under Infrastructure. Install the EF CLI locally in this repository, then apply it explicitly when you are ready to create the local schema:
+## Run from Visual Studio
 
-   ```powershell
-   dotnet tool install dotnet-ef --version 10.0.13 --tool-path ./.tools
-   .\.tools\dotnet-ef.exe database update --project backend/DollarShark.Infrastructure --startup-project backend/DollarShark.Api
-   ```
+Open backend/DollarShark.sln, select the DollarShark Full Stack launch profile, and press F5. The API listens on http://localhost:5017. Its configured SPA proxy starts Vite on http://localhost:5173. Open that Vite URL in your browser. Run npm install in frontend once if dependencies are not installed yet.
 
-   To scaffold a later migration, run `.\.tools\dotnet-ef.exe migrations add <MigrationName> --project backend/DollarShark.Infrastructure --startup-project backend/DollarShark.Api --output-dir Persistence/Migrations`. No migration or database update is run automatically by the API.
+## Run from a terminal
 
-## Frontend
+From the repository root, run the API using its Development launch profile. The SPA proxy starts the Vite development server, so do not start another npm run dev process at the same time.
 
-```powershell
-cd frontend
-npm install
-$env:VITE_API_BASE_URL = "http://localhost:5017"
-npm run dev
-```
+~~~powershell
+dotnet run --project backend/DollarShark.Api
+~~~
 
-Open the Vite URL printed in the terminal (normally `http://localhost:5173`). `VITE_API_BASE_URL` is a public API URL only; never put secrets in `VITE_*` variables.
+Open http://localhost:5173. The checked-in development environment file points the frontend at http://localhost:5017.
+
+## API overview
+
+- Accounts: GET /api/accounts?includeInactive=false, GET /api/accounts/{id}, POST /api/accounts, PUT /api/accounts/{id}, PATCH /api/accounts/{id}/status
+- Categories: GET /api/categories, GET /api/categories/{id}, POST /api/categories, PUT /api/categories/{id}, DELETE /api/categories/{id}
+- Transactions: GET /api/transactions, GET /api/transactions/{id}, POST /api/transactions, PUT /api/transactions/{id}, DELETE /api/transactions/{id}
+
+Transactions accept year, month, accountId, categoryId, transactionType, search, from, to, sortBy, sortDirection, page, and pageSize query parameters. Results include pagination metadata; page size is limited to 100.
 
 ## Build and tests
 
 From the repository root:
 
-```powershell
+~~~powershell
 dotnet build backend/DollarShark.sln
 dotnet test backend/DollarShark.sln
-```
+~~~
 
-From `frontend`:
+From frontend:
 
-```powershell
+~~~powershell
 npm run build
-```
+~~~
 
-## Domain conventions
+The tests use SQLite in-memory relational databases for integration behavior. They do not apply migrations to or modify your SQL Server database.
 
-Transaction amounts use a consistent signed convention: credits and income are positive; purchases, withdrawals, and fees are negative. Amount precision is configured as `decimal(19,4)`. Transaction dates are `DateOnly`, independent of time zone. Account records contain only optional last four digits; never store card numbers, CVVs, passwords, or bank credentials. IDs and nullable category assignment leave room for future statement-import and ownership metadata.
+## Data conventions and scope
 
-## Architecture
-
-- `backend/DollarShark.Domain`: finance entities and domain defaults.
-- `backend/DollarShark.Application`: API-facing account DTO and read contract.
-- `backend/DollarShark.Infrastructure`: EF Core SQL Server context, mappings, and query implementation; migrations belong here.
-- `backend/DollarShark.Api`: composition root, health and accounts endpoints, development-only OpenAPI, and Vite-origin CORS.
-- `backend/DollarShark.Tests`: xUnit domain tests.
-- `frontend`: React, TypeScript, and Vite dashboard shell.
-
-
-
-
-
+- Expenses are negative; income and refunds are positive. Transfers may use either sign and are typed separately.
+- Money uses decimal(19,4) and transaction dates use DateOnly.
+- Account deactivation is soft; transaction history stays associated.
+- A category in use by transactions or child categories cannot be deleted.
+- Account records store only optional last four digits. Never enter full card numbers, CVVs, banking credentials, or account passwords.
+- Statement uploads, automatic categorization, analytics, Telegram, deployment, authentication, budgeting, investments, credit card reconciliation, and automatic transfer matching are out of scope.

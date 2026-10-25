@@ -43,6 +43,73 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                         .HasFilter("[ParentCategoryId] IS NOT NULL");
 
                     b.ToTable("Categories");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000001"),
+                            Name = "Groceries"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000002"),
+                            Name = "Restaurants"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000003"),
+                            Name = "Transportation"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000004"),
+                            Name = "Housing"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000005"),
+                            Name = "Utilities"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000006"),
+                            Name = "Shopping"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000007"),
+                            Name = "Subscriptions"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000008"),
+                            Name = "Health & Fitness"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000009"),
+                            Name = "Travel"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000010"),
+                            Name = "Salary"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000011"),
+                            Name = "Refunds"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000012"),
+                            Name = "Transfers"
+                        },
+                        new
+                        {
+                            Id = new Guid("10000000-0000-0000-0000-000000000013"),
+                            Name = "Other"
+                        });
                 });
 
             modelBuilder.Entity("DollarShark.Domain.FinancialAccount", b =>
@@ -119,6 +186,13 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
 
                     b.Property<DateOnly>("TransactionDate")
                         .HasColumnType("date");
+
+                    b.Property<string>("TransactionType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValue("Expense");
 
                     b.HasKey("Id");
 
