@@ -79,6 +79,7 @@ public sealed class AuthenticationIntegrationTests
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/accounts")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/categories")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/transactions")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/dashboard/overview")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync("/api/accounts", new { name = "x" })).StatusCode);
     }
 
@@ -129,6 +130,57 @@ public sealed class AuthenticationIntegrationTests
         var accountB = await CreateAccount(userB, csrfB, "B account");
         var categoryB = await CreateCategory(userB, csrfB, "B private");
         var transactionB = await CreateTransaction(userB, csrfB, accountB.Id, categoryB.Id);
+        var accountBUsd = await CreateAccount(userB, csrfB, "B USD", "USD");
+        await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-01", 100m, "Income", "October salary");
+        await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-24", 5m, "Refund", "October refund");
+        await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-12", 200m, "Transfer", "Transfer in");
+        await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-13", -200m, "Transfer", "Transfer out");
+        await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-09-07", 70m, "Income", "September salary");
+        await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-09-30", -10m, "Expense", "September expense");
+        await CreateTransaction(userB, csrfB, accountBUsd.Id, null, "2026-10-24", 30m, "Income", "USD income");
+        await CreateTransaction(userB, csrfB, accountBUsd.Id, null, "2026-10-23", 1.25m, "Refund", "USD refund");
+
+        using var dashboardA = JsonDocument.Parse(await (await userA.GetAsync(
+            "/api/dashboard/overview?from=2026-10-01&to=2026-10-24")).Content.ReadAsStringAsync());
+        Assert.Empty(dashboardA.RootElement.GetProperty("currencies").EnumerateArray());
+        Assert.Empty(dashboardA.RootElement.GetProperty("recentTransactions").EnumerateArray());
+
+        using var dashboardB = JsonDocument.Parse(await (await userB.GetAsync(
+            "/api/dashboard/overview?from=2026-10-01&to=2026-10-24&recentLimit=3")).Content.ReadAsStringAsync());
+        var dashboardRoot = dashboardB.RootElement;
+        var currencyTotals = dashboardRoot.GetProperty("currencies").EnumerateArray().ToArray();
+        Assert.Equal(2, currencyTotals.Length);
+        var cad = Assert.Single(currencyTotals, item => item.GetProperty("currency").GetString() == "CAD");
+        Assert.Equal(105m, cad.GetProperty("income").GetDecimal());
+        Assert.Equal(12.5m, cad.GetProperty("expenses").GetDecimal());
+        Assert.Equal(92.5m, cad.GetProperty("netCashFlow").GetDecimal());
+        Assert.Equal(70m, cad.GetProperty("previousIncome").GetDecimal());
+        Assert.Equal(10m, cad.GetProperty("previousExpenses").GetDecimal());
+        Assert.Equal(60m, cad.GetProperty("previousNetCashFlow").GetDecimal());
+        var usd = Assert.Single(currencyTotals, item => item.GetProperty("currency").GetString() == "USD");
+        Assert.Equal(31.25m, usd.GetProperty("income").GetDecimal());
+        Assert.Equal(0m, usd.GetProperty("expenses").GetDecimal());
+        Assert.Equal(31.25m, usd.GetProperty("netCashFlow").GetDecimal());
+        Assert.Equal(0m, usd.GetProperty("previousIncome").GetDecimal());
+        var recent = dashboardRoot.GetProperty("recentTransactions").EnumerateArray().ToArray();
+        Assert.Equal(3, recent.Length);
+        Assert.Equal("2026-10-24", recent[0].GetProperty("transactionDate").GetString());
+        Assert.Equal("2026-10-24", recent[1].GetProperty("transactionDate").GetString());
+        Assert.Equal("2026-10-23", recent[2].GetProperty("transactionDate").GetString());
+        using var repeatedDashboard = JsonDocument.Parse(await (await userB.GetAsync(
+            "/api/dashboard/overview?from=2026-10-01&to=2026-10-24&recentLimit=3")).Content.ReadAsStringAsync());
+        var repeatedIds = repeatedDashboard.RootElement.GetProperty("recentTransactions").EnumerateArray()
+            .Select(item => item.GetProperty("id").GetString()).ToArray();
+        Assert.Equal(recent.Select(item => item.GetProperty("id").GetString()), repeatedIds);
+        using var defaultDashboard = JsonDocument.Parse(await (await userB.GetAsync("/api/dashboard/overview?recentLimit=1"))
+            .Content.ReadAsStringAsync());
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        Assert.Equal(new DateOnly(today.Year, today.Month, 1).ToString("yyyy-MM-dd"),
+            defaultDashboard.RootElement.GetProperty("periodStart").GetString());
+        Assert.Equal(new DateOnly(today.Year, today.Month, DateTime.DaysInMonth(today.Year, today.Month)).ToString("yyyy-MM-dd"),
+            defaultDashboard.RootElement.GetProperty("periodEnd").GetString());
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await userB.GetAsync("/api/dashboard/overview?from=2026-10-01")).StatusCode);
 
         var accountsA = await userA.GetFromJsonAsync<AccountDto[]>("/api/accounts");
         Assert.Single(accountsA!);
@@ -155,27 +207,29 @@ public sealed class AuthenticationIntegrationTests
         var overpost = new { name = "Ownership test", institution = "Bank", accountType = "Savings", currency = "CAD", lastFourDigits = (string?)null, userId = "submitted-owner-id" };
         Assert.Equal(HttpStatusCode.Created, (await Post(userA, "/api/accounts", overpost, csrfA)).StatusCode);
         var accountsB = await userB.GetFromJsonAsync<AccountDto[]>("/api/accounts");
-        Assert.Single(accountsB!);
-        Assert.Equal(accountB.Id, accountsB![0].Id);
+        Assert.Equal(2, accountsB!.Length);
+        Assert.Contains(accountsB, account => account.Id == accountB.Id);
+        Assert.Contains(accountsB, account => account.Id == accountBUsd.Id);
     }
 
     private const string Password = "StrongPass123!";
 
-    private static object AccountBody(string name) => new
+    private static object AccountBody(string name, string currency = "CAD") => new
     {
         name,
         institution = "Test Bank",
         accountType = "Chequing",
-        currency = "CAD",
+        currency,
         lastFourDigits = (string?)null
     };
 
-    private static object TransactionBody(Guid accountId, Guid? categoryId) => new
+    private static object TransactionBody(Guid accountId, Guid? categoryId, string date = "2026-10-20",
+        decimal amount = -12.5m, string type = "Expense", string description = "Test purchase") => new
     {
-        transactionDate = "2026-10-20",
-        description = "Test purchase",
-        amount = -12.5m,
-        transactionType = "Expense",
+        transactionDate = date,
+        description,
+        amount,
+        transactionType = type,
         financialAccountId = accountId,
         categoryId
     };
@@ -189,9 +243,9 @@ public sealed class AuthenticationIntegrationTests
         return await GetCsrfToken(client);
     }
 
-    private static async Task<AccountDto> CreateAccount(HttpClient client, string csrf, string name)
+    private static async Task<AccountDto> CreateAccount(HttpClient client, string csrf, string name, string currency = "CAD")
     {
-        var result = await Post(client, "/api/accounts", AccountBody(name), csrf);
+        var result = await Post(client, "/api/accounts", AccountBody(name, currency), csrf);
         if (!result.IsSuccessStatusCode) throw new InvalidOperationException($"Create account returned {(int)result.StatusCode}: {await result.Content.ReadAsStringAsync()}");
         return (await result.Content.ReadFromJsonAsync<AccountDto>())!;
     }
@@ -203,9 +257,10 @@ public sealed class AuthenticationIntegrationTests
         return (await result.Content.ReadFromJsonAsync<CategoryDto>())!;
     }
 
-    private static async Task<TransactionDto> CreateTransaction(HttpClient client, string csrf, Guid accountId, Guid? categoryId)
+    private static async Task<TransactionDto> CreateTransaction(HttpClient client, string csrf, Guid accountId, Guid? categoryId,
+        string date = "2026-10-20", decimal amount = -12.5m, string type = "Expense", string description = "Test purchase")
     {
-        var result = await Post(client, "/api/transactions", TransactionBody(accountId, categoryId), csrf);
+        var result = await Post(client, "/api/transactions", TransactionBody(accountId, categoryId, date, amount, type, description), csrf);
         result.EnsureSuccessStatusCode();
         return (await result.Content.ReadFromJsonAsync<TransactionDto>())!;
     }

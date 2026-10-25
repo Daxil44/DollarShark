@@ -8,18 +8,8 @@ import AuthPage from './pages/AuthPage';
 import CategoriesPage from './pages/CategoriesPage';
 import TransactionsPage from './pages/TransactionsPage';
 import StatementsPage from './pages/StatementsPage';
+import DashboardPage from './pages/DashboardPage';
 import './App.css';
-
-function Overview() {
-  return <>
-    <div className="page-heading"><div><div className="eyebrow">YOUR MONEY, AT A GLANCE</div><h1>DollarShark</h1><p className="text-secondary mb-0">Manage your accounts, organize categories, and record transactions.</p></div></div>
-    <div className="row g-3">
-      <div className="col-md-4"><div className="content-card h-100 p-4"><h2 className="section-title">Accounts</h2><p className="text-secondary">Create and manage your financial accounts.</p><Link to="/accounts" className="btn btn-outline-dark">Open accounts</Link></div></div>
-      <div className="col-md-4"><div className="content-card h-100 p-4"><h2 className="section-title">Categories</h2><p className="text-secondary">Organize activity with personal and shared categories.</p><Link to="/categories" className="btn btn-outline-dark">Open categories</Link></div></div>
-      <div className="col-md-4"><div className="content-card h-100 p-4"><h2 className="section-title">Transactions</h2><p className="text-secondary">Record, filter, and update transactions.</p><Link to="/transactions" className="btn btn-outline-dark">Open transactions</Link></div></div>
-    </div>
-  </>;
-}
 
 function ProtectedApp() {
   const { user, checking, logout } = useAuth();
@@ -49,7 +39,7 @@ function ProtectedApp() {
       <Navbar.Brand as={Link} to="/" className="brand"><span className="brand-mark">$</span> DollarShark</Navbar.Brand>
       <Navbar.Toggle aria-controls="main-nav" />
       <Navbar.Collapse id="main-nav"><Nav className="me-auto">
-        <Nav.Link as={NavLink} to="/" end>Overview</Nav.Link>
+        <Nav.Link as={NavLink} to="/" end>Dashboard</Nav.Link>
         <Nav.Link as={NavLink} to="/accounts">Accounts</Nav.Link>
         <Nav.Link as={NavLink} to="/categories">Categories</Nav.Link>
         <Nav.Link as={NavLink} to="/transactions">Transactions</Nav.Link>
@@ -59,7 +49,7 @@ function ProtectedApp() {
     <main><Container className="main-content">
       {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
       <Routes>
-        <Route path="/" element={<Overview />} />
+        <Route path="/" element={<DashboardPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/transactions" element={<TransactionsPage />} />

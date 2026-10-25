@@ -1,6 +1,7 @@
 using DollarShark.Application.Accounts;
 using DollarShark.Application.Categories;
 using DollarShark.Application.Common;
+using DollarShark.Application.Dashboard;
 using DollarShark.Application.Transactions;
 using DollarShark.Application.Statements;
 using DollarShark.Api.Security;
@@ -24,6 +25,8 @@ builder.Services.AddScoped<ICurrentUserContext, HttpCurrentUserContext>();
 builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<ITransactionService, TransactionService>();
+builder.Services.AddScoped<IDashboardService, DashboardService>();
+builder.Services.AddScoped<IDashboardRepository, DashboardRepository>();
 builder.Services.AddScoped<FinanceRepository>();
 builder.Services.AddScoped<IAccountRepository>(sp => sp.GetRequiredService<FinanceRepository>());
 builder.Services.AddScoped<ICategoryRepository>(sp => sp.GetRequiredService<FinanceRepository>());
