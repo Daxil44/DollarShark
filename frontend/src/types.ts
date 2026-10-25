@@ -101,6 +101,23 @@ export type StatementCsvPreview = {
   invalidRows: number;
 };
 
+export type StatementImportCandidateChange = {
+  sourceRowNumber: number;
+  selected: boolean;
+  transactionDate: string | null;
+  description: string;
+  amount: number | null;
+  transactionType: string;
+  categoryId: string | null;
+};
+
+export type StatementImportConfirmationResult = {
+  createdCount: number;
+  excludedCount: number;
+  rejectedCount: number;
+  rejectedRows: { sourceRowNumber: number; messages: string[] }[];
+};
+
 export type DashboardCurrencySummary = {
   currency: string;
   income: number;

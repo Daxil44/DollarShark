@@ -197,6 +197,132 @@ public sealed class StatementIntegrationTests
     }
 
     [Fact]
+    public async Task ConfirmationRevalidatesOwnerRowsCreatesTransactionsAndIsIdempotent()
+    {
+        await using var factory = new StatementApiFactory();
+        using var owner = factory.CreateClient();
+        using var other = factory.CreateClient();
+        using var anonymous = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(owner, "import-owner@example.test");
+        var (otherCsrf, otherAccountId) = await RegisterAndCreateAccount(other, "import-other@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var csv = Encoding.UTF8.GetBytes($"Date,Description,Amount,Currency,Reference\n{today},Coffee,-4.25,CAD,C1\n{today},Paycheck,120.00,CAD,P1\n{today},Bus,-3.00,CAD,B1\n");
+        var uploaded = await Upload(owner, accountId, "bank.csv", csv, csrf);
+        var statement = (await uploaded.Content.ReadFromJsonAsync<StatementDto>())!;
+
+        var confirmBody = new { candidates = new[] {
+            new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Coffee", amount = -4.25m, transactionType = "Expense", categoryId = (Guid?)null },
+            new { sourceRowNumber = 3, selected = true, transactionDate = today, description = "Paycheck", amount = 120m, transactionType = "Income", categoryId = (Guid?)null },
+            new { sourceRowNumber = 4, selected = false, transactionDate = today, description = "Bus", amount = -3m, transactionType = "Expense", categoryId = (Guid?)null }
+        }};
+        Assert.Equal(HttpStatusCode.Unauthorized, (await ConfirmImport(anonymous, statement.Id, confirmBody, null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await ParseCsv(other, statement.Id, otherCsrf)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await ConfirmImport(other, statement.Id, confirmBody, otherCsrf)).StatusCode);
+
+        var overviewBefore = await owner.GetFromJsonAsync<JsonElement>("/api/dashboard/overview");
+        Assert.Empty(overviewBefore.GetProperty("currencies").EnumerateArray());
+        var parsed = await ParseCsv(owner, statement.Id, csrf);
+        Assert.Equal(HttpStatusCode.OK, parsed.StatusCode);
+        using (var scope = factory.Services.CreateScope())
+            Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<FinanceDbContext>().Transactions.CountAsync());
+
+        var confirmed = await ConfirmImport(owner, statement.Id, confirmBody, csrf);
+        Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
+        var result = await confirmed.Content.ReadFromJsonAsync<StatementImportConfirmationResult>();
+        Assert.Equal(2, result!.CreatedCount);
+        Assert.Equal(1, result.ExcludedCount);
+        Assert.Equal(HttpStatusCode.Conflict, (await ConfirmImport(owner, statement.Id, confirmBody, csrf)).StatusCode);
+
+        var transactions = await owner.GetFromJsonAsync<TransactionPageResponse>("/api/transactions");
+        Assert.Equal(2, transactions!.TotalCount);
+        Assert.Contains(transactions.Items, x => x.Amount == -4.25m && x.TransactionType == "Expense" && x.FinancialAccountId == accountId && x.Currency == "CAD");
+        Assert.Contains(transactions.Items, x => x.Amount == 120m && x.TransactionType == "Income");
+        var overviewAfter = await owner.GetFromJsonAsync<JsonElement>("/api/dashboard/overview");
+        Assert.Contains(overviewAfter.GetProperty("currencies").EnumerateArray(), item => item.GetProperty("expenses").GetDecimal() == 4.25m && item.GetProperty("income").GetDecimal() == 120m);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+            Assert.Equal(StatementImportStatus.Processed, (await db.StatementImports.SingleAsync(x => x.Id == statement.Id)).Status);
+        }
+        Assert.NotEqual(accountId, otherAccountId);
+    }
+
+    [Fact]
+    public async Task ConfirmationRejectsEmptyTamperedAndInvalidRowsWithoutSaving()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "import-invalid@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var csv = Encoding.UTF8.GetBytes($"Date,Description,Amount\n{today},Coffee,-4.25\n");
+        var upload = await Upload(client, accountId, "invalid-test.csv", csv, csrf);
+        var statement = (await upload.Content.ReadFromJsonAsync<StatementDto>())!;
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await ConfirmImport(client, statement.Id, new { candidates = Array.Empty<object>() }, csrf)).StatusCode);
+        var changedSign = new { candidates = new[] { new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Coffee", amount = 4.25m, transactionType = "Expense", categoryId = (Guid?)null } } };
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await ConfirmImport(client, statement.Id, changedSign, csrf)).StatusCode);
+        var unknownRow = new { candidates = new[] { new { sourceRowNumber = 42, selected = true, transactionDate = today, description = "Coffee", amount = -4.25m, transactionType = "Expense", categoryId = (Guid?)null } } };
+        Assert.Equal(HttpStatusCode.BadRequest, (await ConfirmImport(client, statement.Id, unknownRow, csrf)).StatusCode);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+        Assert.Empty(await db.Transactions.ToListAsync());
+        Assert.Equal(StatementImportStatus.Uploaded, (await db.StatementImports.SingleAsync(x => x.Id == statement.Id)).Status);
+    }
+
+    [Fact]
+    public async Task FailedTransactionBatchRollsBackEveryRowAndCanBeRetried()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "import-rollback@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var csv = Encoding.UTF8.GetBytes($"Date,Description,Amount\n{today},Coffee,-4.25\n{today},Lunch,-9.50\n");
+        var upload = await Upload(client, accountId, "rollback.csv", csv, csrf);
+        var statement = (await upload.Content.ReadFromJsonAsync<StatementDto>())!;
+        var body = new { candidates = new[] {
+            new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Coffee", amount = -4.25m, transactionType = "Expense", categoryId = (Guid?)null },
+            new { sourceRowNumber = 3, selected = true, transactionDate = today, description = "Lunch", amount = -9.50m, transactionType = "Expense", categoryId = (Guid?)null }
+        }};
+        factory.DbFailures.FailTransactionSaveNumber = 2;
+        Assert.Equal(HttpStatusCode.InternalServerError, (await ConfirmImport(client, statement.Id, body, csrf)).StatusCode);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+            Assert.Empty(await db.Transactions.ToListAsync());
+            Assert.Equal(StatementImportStatus.Uploaded, (await db.StatementImports.SingleAsync(x => x.Id == statement.Id)).Status);
+        }
+        factory.DbFailures.FailTransactionSaveNumber = 0;
+        factory.DbFailures.TransactionSaveCalls = 0;
+        Assert.Equal(HttpStatusCode.OK, (await ConfirmImport(client, statement.Id, body, csrf)).StatusCode);
+    }
+
+    [Fact]
+    public async Task ForeignCategoryCannotBeUsedForStatementImport()
+    {
+        await using var factory = new StatementApiFactory();
+        using var owner = factory.CreateClient();
+        using var other = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(owner, "import-category-owner@example.test");
+        await RegisterAndCreateAccount(other, "import-category-other@example.test");
+        Guid foreignCategoryId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            var user = await manager.FindByEmailAsync("import-category-other@example.test");
+            var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+            var category = new Category { Name = "Private", UserId = user!.Id };
+            db.Categories.Add(category); await db.SaveChangesAsync(); foreignCategoryId = category.Id;
+        }
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var statementResponse = await Upload(owner, accountId, "category.csv", Encoding.UTF8.GetBytes($"Date,Description,Amount\n{today},Coffee,-2\n"), csrf);
+        var statement = (await statementResponse.Content.ReadFromJsonAsync<StatementDto>())!;
+        var body = new { candidates = new[] { new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Coffee", amount = -2m, transactionType = "Expense", categoryId = foreignCategoryId } } };
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await ConfirmImport(owner, statement.Id, body, csrf)).StatusCode);
+        using var check = factory.Services.CreateScope();
+        Assert.Empty(await check.ServiceProvider.GetRequiredService<FinanceDbContext>().Transactions.ToListAsync());
+    }
+
+    [Fact]
     public async Task FailedFileDeletionIsRetryableAndDoesNotExposeTheStoredFile()
     {
         await using var factory = new StatementApiFactory();
@@ -273,10 +399,10 @@ public sealed class StatementIntegrationTests
         return response.GetProperty("requestToken").GetString()!;
     }
 
-    private static async Task<HttpResponseMessage> PostJson(HttpClient client, string path, object body, string csrf)
+    private static async Task<HttpResponseMessage> PostJson(HttpClient client, string path, object body, string? csrf)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(body) };
-        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        if (csrf is not null) request.Headers.Add("X-CSRF-TOKEN", csrf);
         return await client.SendAsync(request);
     }
 
@@ -310,6 +436,9 @@ public sealed class StatementIntegrationTests
         return await client.SendAsync(request);
     }
 
+    private static async Task<HttpResponseMessage> ConfirmImport(HttpClient client, Guid id, object body, string? csrf) =>
+        await PostJson(client, $"/api/statements/{id}/confirm-import", body, csrf);
+
     private static byte[] CreateMinimalXlsx()
     {
         using var output = new MemoryStream();
@@ -328,6 +457,8 @@ public sealed class StatementIntegrationTests
         Guid Id, Guid FinancialAccountId, string AccountName, string OriginalFileName,
         long FileSizeBytes, string ContentType, string Status, DateTime UploadedAtUtc, DateTime? ProcessedAtUtc);
     private sealed record StatementPage(IReadOnlyList<StatementDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
+    private sealed record TransactionResponse(Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string TransactionType, string Currency, Guid FinancialAccountId);
+    private sealed record TransactionPageResponse(IReadOnlyList<TransactionResponse> Items, int Page, int PageSize, int TotalCount, int TotalPages);
 
     private sealed class StatementApiFactory : WebApplicationFactory<Program>
     {
@@ -392,6 +523,8 @@ public sealed class StatementIntegrationTests
     {
         public bool FailAdded { get; set; }
         public bool FailDeleted { get; set; }
+        public int FailTransactionSaveNumber { get; set; }
+        public int TransactionSaveCalls { get; set; }
     }
 
     private sealed class SwitchableStatementStorage(
@@ -421,6 +554,13 @@ public sealed class StatementIntegrationTests
                 throw new DbUpdateException("Injected statement insert failure.");
             if (entries is not null && entries.Any(x => x.State == EntityState.Deleted) && failureSwitch.FailDeleted)
                 throw new DbUpdateException("Injected statement delete failure.");
+            var transactionEntries = eventData.Context?.ChangeTracker.Entries<Transaction>();
+            if (transactionEntries is not null && transactionEntries.Any(x => x.State == EntityState.Added))
+            {
+                failureSwitch.TransactionSaveCalls++;
+                if (failureSwitch.FailTransactionSaveNumber == failureSwitch.TransactionSaveCalls)
+                    throw new DbUpdateException("Injected transaction insert failure.");
+            }
             return base.SavingChangesAsync(eventData, result, cancellationToken);
         }
     }

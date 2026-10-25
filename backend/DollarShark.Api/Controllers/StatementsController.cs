@@ -122,4 +122,23 @@ public sealed class StatementsController(
             return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "The statement could not be deleted. Retry the delete request.");
         }
     }
+
+    [HttpPost("{id:guid}/confirm-import")]
+    public async Task<IActionResult> ConfirmImport(Guid id, [FromBody] StatementImportConfirmationRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await service.ConfirmImportAsync(id, request, cancellationToken);
+            if (result.IsSuccess) return Ok(result.Value);
+            if (result.StatusCode == StatusCodes.Status422UnprocessableEntity && result.Value is not null)
+                return UnprocessableEntity(result.Value);
+            return Failure(result);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Statement import confirmation failed for the current user.");
+            return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "The statement could not be imported.");
+        }
+    }
 }
