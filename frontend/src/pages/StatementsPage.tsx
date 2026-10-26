@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Alert, Badge, Button, Form, Modal, Pagination, Spinner, Table } from 'react-bootstrap';
 import { Link } from 'react-router-dom';
 import { api, apiErrorMessage } from '../api';
-import type { Account, StatementCsvCandidate, StatementCsvPreview, StatementImport, StatementImportCandidateChange, StatementImportConfirmationResult, StatementImportPage } from '../types';
+import type { Account, DuplicateCheck, StatementCsvCandidate, StatementCsvPreview, StatementImport, StatementImportCandidateChange, StatementImportConfirmationResult, StatementImportPage } from '../types';
 
 const pageSize = 25;
 const emptyPage: StatementImportPage = { items: [], page: 1, pageSize, totalCount: 0, totalPages: 0 };
@@ -25,7 +25,7 @@ function statusVariant(status: string): 'secondary' | 'warning' | 'success' | 'd
   }
 }
 
-type ReviewRow = StatementCsvCandidate & { selected: boolean; transactionType: string };
+type ReviewRow = StatementCsvCandidate & { selected: boolean; transactionType: string; duplicateDecision: 'Skip' | 'ImportAnyway' | 'Unresolved' | null };
 
 function rowMessages(row: ReviewRow, accountCurrency: string): string[] {
   const messages: string[] = [];
@@ -134,7 +134,8 @@ export default function StatementsPage() {
       const rows = response.data.candidates.map(candidate => ({
         ...candidate,
         selected: false,
-        transactionType: ''
+        transactionType: '',
+        duplicateDecision: candidate.duplicateCheck?.classification === 'LikelyDuplicate' || candidate.duplicateCheck?.classification === 'PossibleDuplicate' ? 'Unresolved' as const : null
       }));
       setCsvPreview({ statement, result: response.data, rows });
     } catch (parseError) {
@@ -153,14 +154,22 @@ export default function StatementsPage() {
   const invalidRows = csvPreview?.rows.filter(row => rowMessages(row, statementAccount?.currency ?? 'CAD').length > 0) ?? [];
   const selectedRows = csvPreview?.rows.filter(row => row.selected && rowMessages(row, statementAccount?.currency ?? 'CAD').length === 0) ?? [];
   const excludedCount = checkedRows.length - selectedRows.length;
+  const unresolvedRows = csvPreview?.rows.filter(row =>
+    (row.duplicateCheck?.classification === 'LikelyDuplicate' || row.duplicateCheck?.classification === 'PossibleDuplicate') && row.duplicateDecision === 'Unresolved') ?? [];
+  const explicitlySkippedEveryCandidate = !!csvPreview && csvPreview.rows.length > 0 && csvPreview.rows.every(row =>
+    (row.duplicateCheck?.classification === 'LikelyDuplicate' || row.duplicateCheck?.classification === 'PossibleDuplicate') && row.duplicateDecision === 'Skip');
+  const canFinalizeImport = selectedRows.length > 0 || explicitlySkippedEveryCandidate;
 
   async function confirmImport() {
-    if (!csvPreview || selectedRows.length === 0) return;
+    if (!csvPreview || !canFinalizeImport) return;
     setError(''); setNotice(''); setConfirming(true);
     const candidates: StatementImportCandidateChange[] = csvPreview.rows.map(row => ({
       sourceRowNumber: row.sourceRowNumber, selected: row.selected,
       transactionDate: row.transactionDate, description: row.description,
-      amount: row.amount, transactionType: row.transactionType, categoryId: null
+      amount: row.amount, transactionType: row.transactionType, categoryId: null,
+      duplicateDecision: row.duplicateDecision,
+      reviewedDuplicateTransactionId: row.duplicateCheck?.existingTransactionId ?? null,
+      reviewedDuplicateClassification: row.duplicateCheck?.classification ?? null
     }));
     try {
       const response = await api.post<StatementImportConfirmationResult>(`/api/statements/${csvPreview.statement.id}/confirm-import`, { candidates });
@@ -168,6 +177,16 @@ export default function StatementsPage() {
       setNotice(`Imported ${response.data.createdCount} transaction${response.data.createdCount === 1 ? '' : 's'}; ${response.data.excludedCount} valid row${response.data.excludedCount === 1 ? '' : 's'} excluded.`);
       await loadStatements(pageNumber);
     } catch (importError) {
+      const details = (importError as { response?: { data?: StatementImportConfirmationResult } }).response?.data;
+      if (details?.rejectedRows?.length) {
+        setCsvPreview(current => current ? ({ ...current, rows: current.rows.map(row => {
+          const rejected = details.rejectedRows.find(item => item.sourceRowNumber === row.sourceRowNumber);
+          if (!rejected?.duplicateCheck) return row;
+          const check: DuplicateCheck = rejected.duplicateCheck;
+          const match = check.classification === 'LikelyDuplicate' || check.classification === 'PossibleDuplicate';
+          return { ...row, duplicateCheck: check, duplicateDecision: match ? 'Unresolved' : null, selected: false };
+        }) }) : current);
+      }
       setError(apiErrorMessage(importError));
     } finally { setConfirming(false); }
   }
@@ -227,12 +246,17 @@ export default function StatementsPage() {
         </div>
         {csvPreview.rows.length === 0 ? <p className="text-secondary">The CSV contains no transaction rows.</p> :
           <Table responsive bordered size="sm" className="align-middle mb-0">
-            <thead><tr><th>Import</th><th>Source row</th><th>Transaction date</th><th>Description</th><th>Amount</th><th>Type</th><th>Currency / reference</th><th>Status</th></tr></thead>
+            <thead><tr><th>Import decision</th><th>Source row</th><th>Transaction date</th><th>Description</th><th>Amount</th><th>Type</th><th>Currency / reference</th><th>Status / duplicate review</th></tr></thead>
             <tbody>{csvPreview.rows.map(row => {
               const messages = rowMessages(row, statementAccount?.currency ?? 'CAD');
               const valid = messages.length === 0;
               return <tr key={row.sourceRowNumber} className={!valid ? 'table-warning' : undefined}>
-              <td><Form.Check aria-label={`Select source row ${row.sourceRowNumber}`} checked={row.selected && valid} disabled={!valid || confirming} onChange={event => editRow(row.sourceRowNumber, { selected: event.currentTarget.checked })} /></td>
+              <td>{row.duplicateCheck && row.duplicateCheck.classification !== 'NoMatch' ?
+                <Form.Select aria-label={`Duplicate decision for row ${row.sourceRowNumber}`} size="sm" disabled={confirming} value={row.duplicateDecision ?? 'Unresolved'} onChange={event => {
+                  const decision = event.currentTarget.value as ReviewRow['duplicateDecision'];
+                  editRow(row.sourceRowNumber, { duplicateDecision: decision, selected: decision === 'ImportAnyway' });
+                }}><option value="Unresolved">Leave unresolved</option><option value="Skip">Skip candidate</option><option value="ImportAnyway">Import anyway</option></Form.Select> :
+                <Form.Check aria-label={`Select source row ${row.sourceRowNumber}`} checked={row.selected && valid} disabled={!valid || confirming} onChange={event => editRow(row.sourceRowNumber, { selected: event.currentTarget.checked })} />}</td>
               <td>{row.sourceRowNumber}</td>
               <td><Form.Control aria-label={`Transaction date row ${row.sourceRowNumber}`} type="date" size="sm" value={row.transactionDate ?? ''} onChange={event => editRow(row.sourceRowNumber, { transactionDate: event.currentTarget.value || null })} />{row.postedDate && <div className="small text-secondary mt-1">Posted: {row.postedDate}</div>}</td>
               <td><Form.Control aria-label={`Description row ${row.sourceRowNumber}`} size="sm" value={row.description} onChange={event => editRow(row.sourceRowNumber, { description: event.currentTarget.value })} />{row.referenceNumber && <div className="small text-secondary mt-1">Ref: {row.referenceNumber}</div>}</td>
@@ -241,10 +265,18 @@ export default function StatementsPage() {
               <td>{row.currency ?? statementAccount?.currency ?? '—'}{row.referenceNumber && <div className="small text-secondary">{row.referenceNumber}</div>}</td>
               <td><Badge bg={valid ? row.selected ? 'primary' : 'secondary' : 'danger'}>{valid ? row.selected ? 'Selected' : 'Excluded' : 'Invalid'}</Badge>
                 {messages.length > 0 && <ul className="small text-danger mb-0 mt-1">{messages.map((message, index) => <li key={`${row.sourceRowNumber}-${index}`}>{message}</li>)}</ul>}
+                {row.duplicateCheck && <div className={`small mt-1 ${row.duplicateCheck.classification === 'NoMatch' ? 'text-secondary' : 'text-danger'}`}>
+                  <strong>{row.duplicateCheck.classification}</strong>: {row.duplicateCheck.reason}
+                  {row.duplicateCheck.existingTransactionId && <div className="border rounded p-2 mt-1 bg-light">
+                    <div>{row.duplicateCheck.existingTransactionDate} · {row.duplicateCheck.existingDescription}</div>
+                    <div>{row.duplicateCheck.existingAmount?.toFixed(2)} {row.duplicateCheck.existingCurrency} · {row.duplicateCheck.existingAccountName}</div>
+                  </div>}
+                </div>}
               </td>
             </tr>})}</tbody>
           </Table>}
-        <div className="d-flex justify-content-end gap-2 mt-3"><Button variant="outline-secondary" onClick={() => setCsvPreview(null)} disabled={confirming}>Cancel</Button><Button variant="dark" disabled={selectedRows.length === 0 || confirming} onClick={() => setConfirmationOpen(true)}>Review import ({selectedRows.length})</Button></div>
+        {unresolvedRows.length > 0 && <Alert variant="warning" className="mt-3 mb-0">Resolve {unresolvedRows.length} flagged row{unresolvedRows.length === 1 ? '' : 's'} by choosing Skip candidate or Import anyway. Unresolved rows block confirmation.</Alert>}
+        <div className="d-flex justify-content-end gap-2 mt-3"><Button variant="outline-secondary" onClick={() => setCsvPreview(null)} disabled={confirming}>Cancel</Button><Button variant="dark" disabled={!canFinalizeImport || unresolvedRows.length > 0 || confirming} onClick={() => setConfirmationOpen(true)}>Review import ({selectedRows.length})</Button></div>
       </section>}
       {statements.totalPages > 1 && <Pagination className="justify-content-center mt-3 mb-0">
         <Pagination.Prev disabled={pageNumber <= 1 || loading} onClick={() => void loadStatements(pageNumber - 1)} />
@@ -254,8 +286,8 @@ export default function StatementsPage() {
     </div>
     <Modal show={confirmationOpen} onHide={() => setConfirmationOpen(false)} centered>
       <Modal.Header closeButton><Modal.Title>Confirm statement import</Modal.Title></Modal.Header>
-      <Modal.Body><p>Import {selectedRows.length} selected transaction{selectedRows.length === 1 ? '' : 's'} into <strong>{csvPreview?.statement.accountName}</strong>?</p><p className="mb-0 text-secondary">{excludedCount} valid row{excludedCount === 1 ? '' : 's'} will be excluded. {invalidRows.length} invalid row{invalidRows.length === 1 ? '' : 's'} will not be imported. Imported rows will appear in Transactions and the dashboard.</p></Modal.Body>
-      <Modal.Footer><Button variant="outline-secondary" onClick={() => setConfirmationOpen(false)} disabled={confirming}>Back to review</Button><Button variant="dark" onClick={() => void confirmImport()} disabled={confirming}>{confirming ? <><Spinner size="sm" className="me-2" />Importing…</> : `Confirm ${selectedRows.length} transactions`}</Button></Modal.Footer>
+      <Modal.Body><p>{selectedRows.length === 0 ? 'Finalize this statement without creating transactions?' : <>Import {selectedRows.length} selected transaction{selectedRows.length === 1 ? '' : 's'} into <strong>{csvPreview?.statement.accountName}</strong>?</>}</p><p className="mb-0 text-secondary">{excludedCount} valid row{excludedCount === 1 ? '' : 's'} will be excluded. {invalidRows.length} invalid row{invalidRows.length === 1 ? '' : 's'} will not be imported. Duplicate warnings marked “Import anyway” will be overridden. Imported rows will appear in Transactions and the dashboard.</p></Modal.Body>
+      <Modal.Footer><Button variant="outline-secondary" onClick={() => setConfirmationOpen(false)} disabled={confirming}>Back to review</Button><Button variant="dark" onClick={() => void confirmImport()} disabled={confirming}>{confirming ? <><Spinner size="sm" className="me-2" />Importing…</> : selectedRows.length === 0 ? 'Confirm skipped rows' : `Confirm ${selectedRows.length} transactions`}</Button></Modal.Footer>
     </Modal>
   </>;
 }

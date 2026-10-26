@@ -44,6 +44,8 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         var transaction = modelBuilder.Entity<Transaction>();
         transaction.HasKey(x => x.Id);
         transaction.Property(x => x.Description).HasMaxLength(300).IsRequired();
+        transaction.Property(x => x.ExternalReference).HasMaxLength(255);
+        transaction.Property(x => x.DuplicateWarningOverridden).HasDefaultValue(false);
         transaction.Property(x => x.Currency).HasMaxLength(3).IsRequired();
         transaction.Property(x => x.Amount).HasPrecision(19, 4);
         transaction.Property(x => x.UserId).HasMaxLength(450);
@@ -52,6 +54,8 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         transaction.HasIndex(x => new { x.FinancialAccountId, x.TransactionDate });
         transaction.HasIndex(x => x.CategoryId);
         transaction.HasIndex(x => x.UserId);
+        transaction.HasIndex(x => new { x.FinancialAccountId, x.ExternalReference })
+            .HasFilter("[ExternalReference] IS NOT NULL");
         transaction.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         transaction.HasOne(x => x.FinancialAccount).WithMany(x => x.Transactions)
             .HasForeignKey(x => x.FinancialAccountId).OnDelete(DeleteBehavior.Cascade);

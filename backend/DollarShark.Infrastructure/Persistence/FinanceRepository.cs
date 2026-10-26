@@ -9,6 +9,7 @@ namespace DollarShark.Infrastructure.Persistence;
 
 public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext currentUser) : IAccountRepository, ICategoryRepository, ITransactionRepository
 {
+    private static readonly SemaphoreSlim SqliteDuplicateQueryGate = new(1, 1);
     private string UserId => string.IsNullOrWhiteSpace(currentUser.UserId)
         ? throw new InvalidOperationException("A signed-in user is required for finance data access.")
         : currentUser.UserId;
@@ -131,6 +132,46 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
 
     public Task<bool> CategoryExistsAsync(Guid id, CancellationToken cancellationToken) =>
         VisibleCategories().AnyAsync(x => x.Id == id, cancellationToken);
+
+    public async Task<IReadOnlyList<DuplicateTransactionCandidate>> FindDuplicateCandidatesAsync(
+        Guid accountId, DateOnly? from, DateOnly? to, IReadOnlyCollection<string> externalReferences,
+        CancellationToken cancellationToken)
+    {
+        var isSqlite = db.Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite";
+        if (isSqlite) await SqliteDuplicateQueryGate.WaitAsync(cancellationToken);
+        try
+        {
+            var results = new Dictionary<Guid, DuplicateTransactionCandidate>();
+            if (from is DateOnly start && to is DateOnly end)
+            {
+                var dateMatches = await DuplicateTransactionQuery(accountId)
+                    .Where(x => x.TransactionDate >= start && x.TransactionDate <= end)
+                    .OrderByDescending(x => x.TransactionDate)
+                    .Select(x => new DuplicateTransactionCandidate(x.Id, x.TransactionDate, x.Description, x.Amount,
+                        x.Currency, x.FinancialAccount.Name, x.ExternalReference))
+                    .ToListAsync(cancellationToken);
+                foreach (var match in dateMatches) results[match.Id] = match;
+            }
+
+            foreach (var referenceBatch in externalReferences.Chunk(1_000))
+            {
+                var referenceMatches = await DuplicateTransactionQuery(accountId)
+                    .Where(x => x.ExternalReference != null && referenceBatch.Contains(x.ExternalReference))
+                    .Select(x => new DuplicateTransactionCandidate(x.Id, x.TransactionDate, x.Description, x.Amount,
+                        x.Currency, x.FinancialAccount.Name, x.ExternalReference))
+                    .ToListAsync(cancellationToken);
+                foreach (var match in referenceMatches) results[match.Id] = match;
+            }
+            return results.Values.ToArray();
+        }
+        finally
+        {
+            if (isSqlite) SqliteDuplicateQueryGate.Release();
+        }
+    }
+
+    private IQueryable<Transaction> DuplicateTransactionQuery(Guid accountId) =>
+        db.Transactions.AsNoTracking().Where(x => x.UserId == UserId && x.FinancialAccountId == accountId);
 
     public async Task AddAsync(Transaction transaction, CancellationToken cancellationToken)
     {

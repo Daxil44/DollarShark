@@ -93,6 +93,18 @@ export type StatementCsvCandidate = {
   referenceNumber: string | null;
   validationMessages: string[];
   status: 'Valid' | 'Invalid';
+  duplicateCheck?: DuplicateCheck | null;
+};
+
+export type DuplicateCheck = {
+  classification: 'NoMatch' | 'LikelyDuplicate' | 'PossibleDuplicate';
+  existingTransactionId: string | null;
+  existingTransactionDate: string | null;
+  existingDescription: string | null;
+  existingAmount: number | null;
+  existingCurrency: string | null;
+  existingAccountName: string | null;
+  reason: string;
 };
 
 export type StatementCsvPreview = {
@@ -109,13 +121,16 @@ export type StatementImportCandidateChange = {
   amount: number | null;
   transactionType: string;
   categoryId: string | null;
+  duplicateDecision: 'Skip' | 'ImportAnyway' | 'Unresolved' | null;
+  reviewedDuplicateTransactionId: string | null;
+  reviewedDuplicateClassification: DuplicateCheck['classification'] | null;
 };
 
 export type StatementImportConfirmationResult = {
   createdCount: number;
   excludedCount: number;
   rejectedCount: number;
-  rejectedRows: { sourceRowNumber: number; messages: string[] }[];
+  rejectedRows: { sourceRowNumber: number; messages: string[]; duplicateCheck?: DuplicateCheck | null }[];
 };
 
 export type DashboardCurrencySummary = {

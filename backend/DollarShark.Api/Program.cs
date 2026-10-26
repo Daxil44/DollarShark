@@ -25,6 +25,7 @@ builder.Services.AddScoped<ICurrentUserContext, HttpCurrentUserContext>();
 builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<ITransactionService, TransactionService>();
+builder.Services.AddScoped<IDuplicateDetectionService, DuplicateDetectionService>();
 builder.Services.AddScoped<IDashboardService, DashboardService>();
 builder.Services.AddScoped<IDashboardRepository, DashboardRepository>();
 builder.Services.AddScoped<FinanceRepository>();
@@ -33,6 +34,12 @@ builder.Services.AddScoped<ICategoryRepository>(sp => sp.GetRequiredService<Fina
 builder.Services.AddScoped<ITransactionRepository>(sp => sp.GetRequiredService<FinanceRepository>());
 builder.Services.AddScoped<IStatementImportService, StatementImportService>();
 builder.Services.AddScoped<IStatementImportRepository, StatementImportRepository>();
+var duplicateDetectionOptions = builder.Configuration.GetSection("DuplicateDetection").Get<DuplicateDetectionOptions>() ?? new DuplicateDetectionOptions();
+if (duplicateDetectionOptions.DateToleranceDays is < 0 or > 30 ||
+    duplicateDetectionOptions.SimilarDescriptionDateToleranceDays < 0 ||
+    duplicateDetectionOptions.SimilarDescriptionDateToleranceDays > duplicateDetectionOptions.DateToleranceDays)
+    throw new InvalidOperationException("DuplicateDetection date tolerances must be between 0 and 30 days, and similar-description tolerance cannot exceed the overall tolerance.");
+builder.Services.AddSingleton(duplicateDetectionOptions);
 builder.Services.AddScoped<IStatementFileValidator, StatementFileValidator>();
 builder.Services.AddScoped<IStatementCsvParser, StatementCsvParser>();
 builder.Services.AddScoped<IStatementStorage, LocalPrivateStatementStorage>();
