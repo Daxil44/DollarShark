@@ -222,7 +222,7 @@ public sealed class StatementIntegrationTests
         var overviewBefore = await owner.GetFromJsonAsync<JsonElement>("/api/dashboard/overview");
         Assert.Empty(overviewBefore.GetProperty("currencies").EnumerateArray());
         var parsed = await ParseCsv(owner, statement.Id, csrf);
-        Assert.Equal(HttpStatusCode.OK, parsed.StatusCode);
+        Assert.True(parsed.StatusCode == HttpStatusCode.OK, await parsed.Content.ReadAsStringAsync());
         using (var scope = factory.Services.CreateScope())
             Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<FinanceDbContext>().Transactions.CountAsync());
 
@@ -243,6 +243,9 @@ public sealed class StatementIntegrationTests
         {
             var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
             Assert.Equal(StatementImportStatus.Processed, (await db.StatementImports.SingleAsync(x => x.Id == statement.Id)).Status);
+            var savedTransactions = await db.Transactions.OrderBy(x => x.Description).ToListAsync();
+            Assert.Equal("C1", savedTransactions.Single(x => x.Description == "Coffee").ExternalReference);
+            Assert.All(savedTransactions, transaction => Assert.False(transaction.DuplicateWarningOverridden));
         }
         Assert.NotEqual(accountId, otherAccountId);
     }
@@ -320,6 +323,130 @@ public sealed class StatementIntegrationTests
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await ConfirmImport(owner, statement.Id, body, csrf)).StatusCode);
         using var check = factory.Services.CreateScope();
         Assert.Empty(await check.ServiceProvider.GetRequiredService<FinanceDbContext>().Transactions.ToListAsync());
+    }
+
+    [Fact]
+    public async Task DuplicatePreviewUsesReferenceAmountCurrencyDateAndNormalizedDescriptionWithinOwnerScope()
+    {
+        await using var factory = new StatementApiFactory();
+        using var owner = factory.CreateClient();
+        using var other = factory.CreateClient();
+        var (csrf, ownerAccount) = await RegisterAndCreateAccount(owner, "duplicate-owner@example.test");
+        var (otherCsrf, otherAccount) = await RegisterAndCreateAccount(other, "duplicate-other@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var date = today.ToString("yyyy-MM-dd");
+        var seed = new
+        {
+            transactionDate = date, description = "Corner-Mart #7", amount = -12.50m,
+            transactionType = "Expense", financialAccountId = ownerAccount, categoryId = (Guid?)null, externalReference = "Bank-Ref-001"
+        };
+        var ownerTransactionResponse = await PostJson(owner, "/api/transactions", seed, csrf);
+        var otherTransactionResponse = await PostJson(other, "/api/transactions", seed with { financialAccountId = otherAccount }, otherCsrf);
+        Assert.Equal(HttpStatusCode.Created, ownerTransactionResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, otherTransactionResponse.StatusCode);
+        var ownerTransaction = await ownerTransactionResponse.Content.ReadFromJsonAsync<TransactionCreatedDto>();
+        var otherTransaction = await otherTransactionResponse.Content.ReadFromJsonAsync<TransactionCreatedDto>();
+
+        var rows = new[]
+        {
+            $"{date},\" corner mart, #7! \",-12.50,CAD,Bank-Ref-001",
+            $"{today.AddDays(-2):yyyy-MM-dd},\" corner mart, #7! \",-12.50,CAD,Other-1",
+            $"{today.AddDays(4):yyyy-MM-dd},\"Corner-Mart #7\",-12.50,CAD,Other-2",
+            $"{date},\"Corner-Mart #7\",-12.50,USD,Other-3"
+        };
+        var csv = Encoding.UTF8.GetBytes("Date,Description,Amount,Currency,Reference\n" + string.Join('\n', rows) + "\n");
+        var uploaded = await Upload(owner, ownerAccount, "duplicate-preview.csv", csv, csrf);
+        var statement = (await uploaded.Content.ReadFromJsonAsync<StatementDto>())!;
+        var parsed = await ParseCsv(owner, statement.Id, csrf);
+        Assert.True(parsed.StatusCode == HttpStatusCode.OK, await parsed.Content.ReadAsStringAsync());
+        using var json = JsonDocument.Parse(await parsed.Content.ReadAsStringAsync());
+        var candidates = json.RootElement.GetProperty("candidates").EnumerateArray().ToArray();
+        Assert.Equal("LikelyDuplicate", candidates[0].GetProperty("duplicateCheck").GetProperty("classification").GetString());
+        Assert.Equal(ownerTransaction!.Id, candidates[0].GetProperty("duplicateCheck").GetProperty("existingTransactionId").GetGuid());
+        Assert.NotEqual(otherTransaction!.Id, candidates[0].GetProperty("duplicateCheck").GetProperty("existingTransactionId").GetGuid());
+        Assert.Equal("Same external transaction reference on this account.", candidates[0].GetProperty("duplicateCheck").GetProperty("reason").GetString());
+        Assert.Equal("Corner-Mart #7", candidates[0].GetProperty("duplicateCheck").GetProperty("existingDescription").GetString());
+        Assert.Equal("PossibleDuplicate", candidates[1].GetProperty("duplicateCheck").GetProperty("classification").GetString());
+        Assert.Equal(ownerTransaction.Id, candidates[1].GetProperty("duplicateCheck").GetProperty("existingTransactionId").GetGuid());
+        Assert.Contains("normalized description", candidates[1].GetProperty("duplicateCheck").GetProperty("reason").GetString());
+        Assert.Contains("2 day(s) apart", candidates[1].GetProperty("duplicateCheck").GetProperty("reason").GetString());
+        Assert.Equal("NoMatch", candidates[2].GetProperty("duplicateCheck").GetProperty("classification").GetString());
+        Assert.Equal("NoMatch", candidates[3].GetProperty("duplicateCheck").GetProperty("classification").GetString());
+    }
+
+    [Fact]
+    public async Task DuplicateCandidatesCanBeSkippedOverriddenOrLeftUnresolved()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "duplicate-decisions@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var existing = new { transactionDate = today, description = "Cafe North", amount = -8m, transactionType = "Expense", financialAccountId = accountId, categoryId = (Guid?)null, externalReference = (string?)null };
+        Assert.Equal(HttpStatusCode.Created, (await PostJson(client, "/api/transactions", existing, csrf)).StatusCode);
+
+        var cleanCsv = Encoding.UTF8.GetBytes($"Date,Description,Amount,Currency\n{today},\"Cafe North\",-8,CAD\n{today},Books,-20,CAD\n");
+        var skipStatement = (await (await Upload(client, accountId, "skip.csv", cleanCsv, csrf)).Content.ReadFromJsonAsync<StatementDto>())!;
+        var skipReview = await ReadDuplicateReview(client, skipStatement.Id, csrf);
+        var skipBody = new { candidates = new[] {
+            new { sourceRowNumber = 2, selected = false, transactionDate = today, description = "Cafe North", amount = -8m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = (string?)"Skip", reviewedDuplicateTransactionId = (Guid?)skipReview.Id, reviewedDuplicateClassification = (string?)skipReview.Classification },
+            new { sourceRowNumber = 3, selected = true, transactionDate = today, description = "Books", amount = -20m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = (string?)null, reviewedDuplicateTransactionId = (Guid?)null, reviewedDuplicateClassification = (string?)"NoMatch" }
+        }};
+        var skipped = await ConfirmImport(client, skipStatement.Id, skipBody, csrf);
+        Assert.Equal(HttpStatusCode.OK, skipped.StatusCode);
+        var skippedResult = await skipped.Content.ReadFromJsonAsync<StatementImportConfirmationResult>();
+        Assert.Equal(1, skippedResult!.CreatedCount);
+        Assert.Equal(1, skippedResult.ExcludedCount);
+
+        var overrideStatement = (await (await Upload(client, accountId, "override.csv", Encoding.UTF8.GetBytes($"Date,Description,Amount,Currency\n{today},\"Cafe North\",-8,CAD\n"), csrf)).Content.ReadFromJsonAsync<StatementDto>())!;
+        var overrideReview = await ReadDuplicateReview(client, overrideStatement.Id, csrf);
+        var overrideBody = new { candidates = new[] { new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Cafe North", amount = -8m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = "ImportAnyway", reviewedDuplicateTransactionId = overrideReview.Id, reviewedDuplicateClassification = overrideReview.Classification } } };
+        Assert.Equal(HttpStatusCode.OK, (await ConfirmImport(client, overrideStatement.Id, overrideBody, csrf)).StatusCode);
+        using (var overrideScope = factory.Services.CreateScope())
+        {
+            var overrideDb = overrideScope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+            Assert.True(await overrideDb.Transactions.AnyAsync(x => x.Description == "Cafe North" && x.DuplicateWarningOverridden));
+        }
+
+        var skipAllStatement = (await (await Upload(client, accountId, "skip-all.csv", Encoding.UTF8.GetBytes($"Date,Description,Amount,Currency\n{today},\"Cafe North\",-8,CAD\n"), csrf)).Content.ReadFromJsonAsync<StatementDto>())!;
+        var skipAllReview = await ReadDuplicateReview(client, skipAllStatement.Id, csrf);
+        var skipAllBody = new { candidates = new[] { new { sourceRowNumber = 2, selected = false, transactionDate = today, description = "Cafe North", amount = -8m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = (string?)"Skip", reviewedDuplicateTransactionId = skipAllReview.Id, reviewedDuplicateClassification = (string?)skipAllReview.Classification } } };
+        var finalizedSkip = await ConfirmImport(client, skipAllStatement.Id, skipAllBody, csrf);
+        Assert.Equal(HttpStatusCode.OK, finalizedSkip.StatusCode);
+        Assert.Equal(0, (await finalizedSkip.Content.ReadFromJsonAsync<StatementImportConfirmationResult>())!.CreatedCount);
+
+        var unresolvedStatement = (await (await Upload(client, accountId, "unresolved.csv", Encoding.UTF8.GetBytes($"Date,Description,Amount,Currency\n{today},\"Cafe North\",-8,CAD\n{today},Groceries,-15,CAD\n"), csrf)).Content.ReadFromJsonAsync<StatementDto>())!;
+        var unresolvedReview = await ReadDuplicateReview(client, unresolvedStatement.Id, csrf);
+        var unresolvedBody = new { candidates = new[] {
+            new { sourceRowNumber = 2, selected = false, transactionDate = today, description = "Cafe North", amount = -8m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = (string?)"Unresolved", reviewedDuplicateTransactionId = (Guid?)unresolvedReview.Id, reviewedDuplicateClassification = (string?)unresolvedReview.Classification },
+            new { sourceRowNumber = 3, selected = true, transactionDate = today, description = "Groceries", amount = -15m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = (string?)null, reviewedDuplicateTransactionId = (Guid?)null, reviewedDuplicateClassification = (string?)"NoMatch" }
+        } };
+        var unresolved = await ConfirmImport(client, unresolvedStatement.Id, unresolvedBody, csrf);
+        Assert.True(unresolved.StatusCode == HttpStatusCode.UnprocessableEntity,
+            $"Expected 422; got {(int)unresolved.StatusCode}: {await unresolved.Content.ReadAsStringAsync()}");
+        var tamperedStatement = (await (await Upload(client, accountId, "tampered-decision.csv", Encoding.UTF8.GetBytes($"Date,Description,Amount,Currency\n{today},Fresh Market,-10,CAD\n"), csrf)).Content.ReadFromJsonAsync<StatementDto>())!;
+        var tamperedBody = new { candidates = new[] { new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Fresh Market", amount = -10m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = "ImportAnyway" } } };
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await ConfirmImport(client, tamperedStatement.Id, tamperedBody, csrf)).StatusCode);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+        Assert.Equal(3, await db.Transactions.CountAsync());
+        Assert.Equal(StatementImportStatus.Uploaded, (await db.StatementImports.SingleAsync(x => x.Id == unresolvedStatement.Id)).Status);
+    }
+
+    [Fact]
+    public async Task ConcurrentConfirmationCreatesTheBatchOnlyOnce()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "duplicate-concurrent@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var statement = (await (await Upload(client, accountId, "concurrent.csv", Encoding.UTF8.GetBytes($"Date,Description,Amount\n{today},Coffee,-3\n"), csrf)).Content.ReadFromJsonAsync<StatementDto>())!;
+        var body = new { candidates = new[] { new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Coffee", amount = -3m, transactionType = "Expense", categoryId = (Guid?)null, duplicateDecision = (string?)null } } };
+
+        var results = await Task.WhenAll(ConfirmImport(client, statement.Id, body, csrf), ConfirmImport(client, statement.Id, body, csrf));
+        Assert.Single(results, response => response.StatusCode == HttpStatusCode.OK);
+        Assert.Single(results, response => response.StatusCode == HttpStatusCode.Conflict);
+        using var scope = factory.Services.CreateScope();
+        Assert.Single(await scope.ServiceProvider.GetRequiredService<FinanceDbContext>().Transactions.ToListAsync());
     }
 
     [Fact]
@@ -439,6 +566,15 @@ public sealed class StatementIntegrationTests
     private static async Task<HttpResponseMessage> ConfirmImport(HttpClient client, Guid id, object body, string? csrf) =>
         await PostJson(client, $"/api/statements/{id}/confirm-import", body, csrf);
 
+    private static async Task<DuplicateReviewInfo> ReadDuplicateReview(HttpClient client, Guid id, string csrf)
+    {
+        var response = await ParseCsv(client, id, csrf);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var duplicate = json.RootElement.GetProperty("candidates")[0].GetProperty("duplicateCheck");
+        return new DuplicateReviewInfo(duplicate.GetProperty("existingTransactionId").GetGuid(), duplicate.GetProperty("classification").GetString()!);
+    }
+
     private static byte[] CreateMinimalXlsx()
     {
         using var output = new MemoryStream();
@@ -459,6 +595,8 @@ public sealed class StatementIntegrationTests
     private sealed record StatementPage(IReadOnlyList<StatementDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
     private sealed record TransactionResponse(Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string TransactionType, string Currency, Guid FinancialAccountId);
     private sealed record TransactionPageResponse(IReadOnlyList<TransactionResponse> Items, int Page, int PageSize, int TotalCount, int TotalPages);
+    private sealed record TransactionCreatedDto(Guid Id);
+    private sealed record DuplicateReviewInfo(Guid Id, string Classification);
 
     private sealed class StatementApiFactory : WebApplicationFactory<Program>
     {

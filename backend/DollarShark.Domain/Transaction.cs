@@ -10,6 +10,8 @@ public sealed class Transaction
     public Category? Category { get; set; }
     public DateOnly TransactionDate { get; set; }
     public string Description { get; set; } = string.Empty;
+    public string? ExternalReference { get; set; }
+    public bool DuplicateWarningOverridden { get; set; }
     // Expenses are negative; income and refunds positive. Transfers may use either sign.
     public decimal Amount { get; set; }
     public TransactionType TransactionType { get; set; } = TransactionType.Expense;

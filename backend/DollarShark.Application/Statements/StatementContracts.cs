@@ -32,16 +32,18 @@ public sealed record StatementCsvCandidate(
     string? Currency,
     string? ReferenceNumber,
     IReadOnlyList<string> ValidationMessages,
-    string Status);
+    string Status,
+    DuplicateCheckResult? DuplicateCheck = null);
 public sealed record StatementCsvPreview(
     IReadOnlyList<StatementCsvCandidate> Candidates,
     int ValidRows,
     int InvalidRows);
 public sealed record StatementImportCandidateChange(
     int SourceRowNumber, bool Selected, DateOnly? TransactionDate, string? Description,
-    decimal? Amount, string? TransactionType, Guid? CategoryId);
+    decimal? Amount, string? TransactionType, Guid? CategoryId, string? DuplicateDecision = null,
+    Guid? ReviewedDuplicateTransactionId = null, string? ReviewedDuplicateClassification = null);
 public sealed record StatementImportConfirmationRequest(IReadOnlyList<StatementImportCandidateChange>? Candidates);
-public sealed record StatementImportRejectedRow(int SourceRowNumber, IReadOnlyList<string> Messages);
+public sealed record StatementImportRejectedRow(int SourceRowNumber, IReadOnlyList<string> Messages, DuplicateCheckResult? DuplicateCheck = null);
 public sealed record StatementImportConfirmationResult(
     int CreatedCount, int ExcludedCount, int RejectedCount, IReadOnlyList<StatementImportRejectedRow> RejectedRows);
 
@@ -100,12 +102,15 @@ public sealed class StatementImportService(
     IStatementImportRepository repository,
     IStatementFileValidator validator,
     IStatementCsvParser csvParser,
+    IDuplicateDetectionService duplicateDetection,
     ITransactionService transactionService,
     IStatementStorage storage,
     StatementUploadOptions options,
     StatementCsvParsingOptions csvOptions,
     ILogger<StatementImportService> logger) : IStatementImportService
 {
+    private static readonly Dictionary<Guid, ConfirmationGate> ConfirmationLocks = [];
+    private static readonly object ConfirmationLocksSync = new();
     private const int MaxFileNameLength = 255;
     private static readonly IReadOnlyDictionary<string, string> AllowedTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -232,7 +237,13 @@ public sealed class StatementImportService(
             await using var content = await storage.OpenReadAsync(statement.StorageKey, cancellationToken);
             if (content.CanSeek && content.Length > options.MaxFileSizeBytes)
                 return new UseCaseResult<StatementCsvPreview>(null, StatusCodes.Status413PayloadTooLarge, "The statement file exceeds the configured size limit.");
-            return UseCaseResult<StatementCsvPreview>.Ok(await csvParser.ParseAsync(content, csvOptions.MaxRows, cancellationToken));
+            var preview = await csvParser.ParseAsync(content, csvOptions.MaxRows, cancellationToken);
+            var currency = await repository.GetAccountCurrencyForUserAsync(statement.FinancialAccountId, RequireUserId(), cancellationToken) ?? "CAD";
+            var duplicateRequests = preview.Candidates.Select(candidate => new DuplicateDetectionRequest(candidate.TransactionDate,
+                candidate.Description, candidate.Amount, candidate.Currency ?? currency, candidate.ReferenceNumber)).ToArray();
+            var duplicateResults = await duplicateDetection.CheckManyAsync(statement.FinancialAccountId, duplicateRequests, cancellationToken);
+            var candidates = preview.Candidates.Select((candidate, index) => candidate with { DuplicateCheck = duplicateResults[index] }).ToArray();
+            return UseCaseResult<StatementCsvPreview>.Ok(preview with { Candidates = candidates });
         }
         catch (FileNotFoundException)
         {
@@ -255,6 +266,41 @@ public sealed class StatementImportService(
     public async Task<UseCaseResult<StatementImportConfirmationResult>> ConfirmImportAsync(
         Guid id, StatementImportConfirmationRequest request, CancellationToken cancellationToken)
     {
+        ConfirmationGate gate;
+        lock (ConfirmationLocksSync)
+        {
+            if (ConfirmationLocks.TryGetValue(id, out var existing)) gate = existing;
+            else ConfirmationLocks[id] = gate = new ConfirmationGate();
+            gate.Users++;
+        }
+
+        var entered = false;
+        try
+        {
+            await gate.Semaphore.WaitAsync(cancellationToken);
+            entered = true;
+            return await ConfirmImportCoreAsync(id, request, cancellationToken);
+        }
+        finally
+        {
+            if (entered) gate.Semaphore.Release();
+            lock (ConfirmationLocksSync)
+            {
+                gate.Users--;
+                if (gate.Users == 0) ConfirmationLocks.Remove(id);
+            }
+        }
+    }
+
+    private sealed class ConfirmationGate
+    {
+        public SemaphoreSlim Semaphore { get; } = new(1, 1);
+        public int Users { get; set; }
+    }
+
+    private async Task<UseCaseResult<StatementImportConfirmationResult>> ConfirmImportCoreAsync(
+        Guid id, StatementImportConfirmationRequest request, CancellationToken cancellationToken)
+    {
         if (id == Guid.Empty) return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("id", "A valid statement ID is required."));
         var userId = RequireUserId();
         var statement = await repository.GetTrackedAsync(id, userId, cancellationToken);
@@ -265,6 +311,8 @@ public sealed class StatementImportService(
             return UseCaseResult<StatementImportConfirmationResult>.Conflict("This statement has already been processed or cannot be imported in its current state.");
         if (request.Candidates is null)
             return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Candidate rows are required."));
+        if (request.Candidates.Any(candidate => candidate is null))
+            return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Candidate rows cannot be null."));
 
         StatementCsvPreview preview;
         try
@@ -283,12 +331,19 @@ public sealed class StatementImportService(
             return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Submitted rows do not match the uploaded CSV. Parse the statement again and retry."));
 
         var selected = request.Candidates.Where(x => x.Selected).ToArray();
-        if (selected.Length == 0)
-            return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Select at least one valid row to import."));
 
         var currency = await repository.GetAccountCurrencyForUserAsync(statement.FinancialAccountId, userId, cancellationToken);
         if (currency is null) return UseCaseResult<StatementImportConfirmationResult>.NotFound("The statement's financial account was not found.");
         var rejected = new List<StatementImportRejectedRow>();
+        var duplicateRequests = request.Candidates.Select(candidate =>
+        {
+            var source = sourceByNumber[candidate.SourceRowNumber];
+            return new DuplicateDetectionRequest(candidate.TransactionDate, candidate.Description, candidate.Amount,
+                source.Currency ?? currency, source.ReferenceNumber);
+        }).ToArray();
+        var duplicateResults = await duplicateDetection.CheckManyAsync(statement.FinancialAccountId, duplicateRequests, cancellationToken);
+        var duplicateChecks = request.Candidates.Select((candidate, index) => (candidate.SourceRowNumber, Result: duplicateResults[index]))
+            .ToDictionary(x => x.SourceRowNumber, x => x.Result);
         foreach (var candidate in selected)
         {
             var messages = new List<string>();
@@ -313,22 +368,77 @@ public sealed class StatementImportService(
                 messages.Add("Choose Expense, Income, Refund, or Transfer for every selected row.");
             if (messages.Count > 0) rejected.Add(new StatementImportRejectedRow(candidate.SourceRowNumber, messages.Distinct().ToArray()));
         }
+
+        foreach (var candidate in request.Candidates)
+        {
+            var duplicate = duplicateChecks[candidate.SourceRowNumber];
+            var isMatch = duplicate.Classification is nameof(DuplicateClassification.LikelyDuplicate) or nameof(DuplicateClassification.PossibleDuplicate);
+            var reviewMatches = isMatch
+                ? candidate.ReviewedDuplicateTransactionId == duplicate.ExistingTransactionId &&
+                  string.Equals(candidate.ReviewedDuplicateClassification, duplicate.Classification, StringComparison.Ordinal)
+                : candidate.ReviewedDuplicateTransactionId is null &&
+                  (candidate.ReviewedDuplicateClassification is null or nameof(DuplicateClassification.NoMatch));
+            var decision = Enum.TryParse<DuplicateDecision>(candidate.DuplicateDecision, true, out var parsedDecision) && Enum.IsDefined(parsedDecision)
+                ? parsedDecision : (DuplicateDecision?)null;
+            string? decisionError = null;
+            if (!reviewMatches) decisionError = "Duplicate results changed since review. Review the updated match before confirming.";
+            else if (isMatch && decision is null) decisionError = "Review this possible duplicate: choose Skip or Import anyway before confirming.";
+            else if (isMatch && decision == DuplicateDecision.Unresolved) decisionError = "This possible duplicate is unresolved. Choose Skip or Import anyway before confirming.";
+            else if (isMatch && decision == DuplicateDecision.Skip && candidate.Selected) decisionError = "A skipped duplicate cannot be selected for import.";
+            else if (isMatch && decision == DuplicateDecision.ImportAnyway && !candidate.Selected) decisionError = "Select this row to import it anyway, or choose Skip.";
+            else if (!isMatch && candidate.DuplicateDecision is not null) decisionError = "Duplicate status changed since review. Review the updated result before confirming.";
+            if (decisionError is not null)
+                rejected.Add(new StatementImportRejectedRow(candidate.SourceRowNumber, [decisionError], duplicate));
+        }
         if (rejected.Count > 0)
         {
-            var value = new StatementImportConfirmationResult(0, request.Candidates.Count - selected.Length, rejected.Count, rejected);
+            var rejectedRows = rejected.GroupBy(x => x.SourceRowNumber).Select(group => new StatementImportRejectedRow(
+                group.Key, group.SelectMany(x => x.Messages).Distinct().ToArray(),
+                duplicateChecks.GetValueOrDefault(group.Key) ?? group.Select(x => x.DuplicateCheck).FirstOrDefault(x => x is not null))).ToArray();
+            var value = new StatementImportConfirmationResult(0, request.Candidates.Count - selected.Length, rejectedRows.Length, rejectedRows);
             return new UseCaseResult<StatementImportConfirmationResult>(value, StatusCodes.Status422UnprocessableEntity, "Some selected rows need correction before they can be imported.");
         }
+
+        var explicitlySkippedEveryCandidate = request.Candidates.Count > 0 && request.Candidates.All(candidate =>
+            (duplicateChecks[candidate.SourceRowNumber].Classification is nameof(DuplicateClassification.LikelyDuplicate) or nameof(DuplicateClassification.PossibleDuplicate)) &&
+            candidate.DuplicateDecision?.Equals("Skip", StringComparison.OrdinalIgnoreCase) == true && !candidate.Selected);
+        if (selected.Length == 0 && !explicitlySkippedEveryCandidate)
+            return UseCaseResult<StatementImportConfirmationResult>.Invalid(Error("candidates", "Select at least one valid row or explicitly skip every flagged duplicate."));
 
         await using var transaction = await repository.BeginTransactionAsync(cancellationToken);
         if (!await repository.TryClaimForProcessingAsync(id, userId, cancellationToken))
             return UseCaseResult<StatementImportConfirmationResult>.Conflict("This statement has already been processed or is being imported.");
 
         statement.Status = StatementImportStatus.Processing;
+        // Repeat duplicate detection after claiming the statement, inside the same database transaction.
+        var currentDuplicateResults = await duplicateDetection.CheckManyAsync(statement.FinancialAccountId, duplicateRequests, cancellationToken);
+        for (var index = 0; index < request.Candidates.Count; index++)
+        {
+            var candidate = request.Candidates[index];
+            var source = sourceByNumber[candidate.SourceRowNumber];
+            var current = currentDuplicateResults[index];
+            var wasCheckedMatch = duplicateChecks[candidate.SourceRowNumber].Classification is nameof(DuplicateClassification.LikelyDuplicate) or nameof(DuplicateClassification.PossibleDuplicate);
+            var isNowMatch = current.Classification is nameof(DuplicateClassification.LikelyDuplicate) or nameof(DuplicateClassification.PossibleDuplicate);
+            var decisionValid = wasCheckedMatch == isNowMatch &&
+                duplicateChecks[candidate.SourceRowNumber].ExistingTransactionId == current.ExistingTransactionId &&
+                duplicateChecks[candidate.SourceRowNumber].Classification == current.Classification && (!isNowMatch ||
+                (candidate.DuplicateDecision?.Equals("Skip", StringComparison.OrdinalIgnoreCase) == true && !candidate.Selected) ||
+                (candidate.DuplicateDecision?.Equals("ImportAnyway", StringComparison.OrdinalIgnoreCase) == true && candidate.Selected));
+            if (!decisionValid)
+            {
+                var value = new StatementImportConfirmationResult(0, request.Candidates.Count - selected.Length, 1,
+                    [new StatementImportRejectedRow(candidate.SourceRowNumber, ["Duplicate results changed during confirmation. Review the statement and try again."], current)]);
+                return new UseCaseResult<StatementImportConfirmationResult>(value, StatusCodes.Status422UnprocessableEntity, "Duplicate results changed during confirmation.");
+            }
+        }
         foreach (var candidate in selected)
         {
-            var create = await transactionService.CreateAsync(new TransactionRequest(
+            var duplicateWasOverridden = candidate.DuplicateDecision?.Equals("ImportAnyway", StringComparison.OrdinalIgnoreCase) == true &&
+                duplicateChecks[candidate.SourceRowNumber].Classification is nameof(DuplicateClassification.LikelyDuplicate) or nameof(DuplicateClassification.PossibleDuplicate);
+            var create = await transactionService.CreateImportedAsync(new TransactionRequest(
                 candidate.TransactionDate!.Value, candidate.Description, candidate.Amount!.Value,
-                candidate.TransactionType, statement.FinancialAccountId, candidate.CategoryId), cancellationToken);
+                candidate.TransactionType, statement.FinancialAccountId, candidate.CategoryId,
+                sourceByNumber[candidate.SourceRowNumber].ReferenceNumber), duplicateWasOverridden, cancellationToken);
             if (!create.IsSuccess)
             {
                 var messages = create.Errors?.SelectMany(x => x.Value).Distinct().ToArray() ?? [create.Title ?? "The transaction could not be saved."];
