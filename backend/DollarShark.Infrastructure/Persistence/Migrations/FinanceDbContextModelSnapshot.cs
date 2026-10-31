@@ -205,6 +205,9 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                     b.Property<long>("FileSizeBytes")
                         .HasColumnType("bigint");
 
+                    b.Property<int>("ImportedTransactionCount")
+                        .HasColumnType("int");
+
                     b.Property<Guid>("FinancialAccountId")
                         .HasColumnType("uniqueidentifier");
 
@@ -220,6 +223,13 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("StatementType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("Bank");
 
                     b.Property<string>("StorageKey")
                         .IsRequired()

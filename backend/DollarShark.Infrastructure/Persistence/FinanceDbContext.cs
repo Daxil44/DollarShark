@@ -65,6 +65,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         var statement = modelBuilder.Entity<StatementImport>();
         statement.HasKey(x => x.Id);
         statement.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+        statement.Property(x => x.StatementType).HasMaxLength(20).HasDefaultValue("Bank").IsRequired();
         statement.Property(x => x.OriginalFileName).HasMaxLength(255).IsRequired();
         statement.Property(x => x.StorageKey).HasMaxLength(64).IsRequired();
         statement.Property(x => x.FileSizeBytes).IsRequired();

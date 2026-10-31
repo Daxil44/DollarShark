@@ -16,11 +16,12 @@ public sealed class StatementCsvParsingOptions
     public int MaxRows { get; set; } = 10_000;
 }
 
-public sealed record StatementUploadCommand(Guid FinancialAccountId, string OriginalFileName, long FileSizeBytes, Stream Content);
+public sealed record StatementUploadCommand(Guid FinancialAccountId, string OriginalFileName, long FileSizeBytes, Stream Content, string StatementType = "Bank");
 public sealed record StatementStorageResult(string StorageKey, long FileSizeBytes, string ContentType, string FileHash);
 public sealed record StatementImportDto(
     Guid Id, Guid FinancialAccountId, string AccountName, string OriginalFileName,
-    long FileSizeBytes, string ContentType, string Status, DateTime UploadedAtUtc, DateTime? ProcessedAtUtc);
+    long FileSizeBytes, string ContentType, string Status, DateTime UploadedAtUtc, DateTime? ProcessedAtUtc,
+    string StatementType = "Bank", int ImportedTransactionCount = 0);
 public sealed record StatementImportPage(
     IReadOnlyList<StatementImportDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
 public sealed record StatementCsvCandidate(
@@ -128,6 +129,8 @@ public sealed class StatementImportService(
         var userId = RequireUserId();
         if (command.FinancialAccountId == Guid.Empty)
             return UseCaseResult<StatementImportDto>.Invalid(Error("financialAccountId", "Select a valid financial account."));
+        if (command.StatementType is not ("Bank" or "CreditCard"))
+            return UseCaseResult<StatementImportDto>.Invalid(Error("statementType", "Choose Bank or CreditCard."));
         var accountName = await repository.GetAccountNameForUserAsync(command.FinancialAccountId, userId, cancellationToken);
         if (accountName is null)
             return UseCaseResult<StatementImportDto>.NotFound("Financial account was not found.");
@@ -153,6 +156,7 @@ public sealed class StatementImportService(
         {
             UserId = userId,
             FinancialAccountId = command.FinancialAccountId,
+            StatementType = command.StatementType,
             OriginalFileName = fileName,
             StorageKey = stored.StorageKey,
             FileSizeBytes = stored.FileSizeBytes,
@@ -244,7 +248,7 @@ public sealed class StatementImportService(
             var preview = await csvParser.ParseAsync(content, csvOptions.MaxRows, cancellationToken);
             var currency = await repository.GetAccountCurrencyForUserAsync(statement.FinancialAccountId, RequireUserId(), cancellationToken) ?? "CAD";
             var duplicateRequests = preview.Candidates.Select(candidate => new DuplicateDetectionRequest(candidate.TransactionDate,
-                candidate.Description, candidate.Amount, candidate.Currency ?? currency, candidate.ReferenceNumber)).ToArray();
+                candidate.Description, NormalizePreviewAmount(statement.StatementType, candidate.Amount), candidate.Currency ?? currency, candidate.ReferenceNumber)).ToArray();
             var duplicateResults = await duplicateDetection.CheckManyAsync(statement.FinancialAccountId, duplicateRequests, cancellationToken);
             var candidates = preview.Candidates.Select((candidate, index) => candidate with { DuplicateCheck = duplicateResults[index] }).ToArray();
             return UseCaseResult<StatementCsvPreview>.Ok(preview with { Candidates = candidates });
@@ -342,7 +346,8 @@ public sealed class StatementImportService(
         var duplicateRequests = request.Candidates.Select(candidate =>
         {
             var source = sourceByNumber[candidate.SourceRowNumber];
-            return new DuplicateDetectionRequest(candidate.TransactionDate, candidate.Description, candidate.Amount,
+            decimal? amount = candidate.Amount is null ? null : NormalizeImportAmount(statement.StatementType, candidate.Amount.Value, candidate.TransactionType);
+            return new DuplicateDetectionRequest(candidate.TransactionDate, candidate.Description, amount,
                 source.Currency ?? currency, source.ReferenceNumber);
         }).ToArray();
         var duplicateResults = await duplicateDetection.CheckManyAsync(statement.FinancialAccountId, duplicateRequests, cancellationToken);
@@ -363,9 +368,9 @@ public sealed class StatementImportService(
                 messages.Add($"The CSV currency ({source.Currency}) does not match the account currency ({currency}).");
             if (candidate.Amount is decimal amount)
             {
-                if (string.Equals(candidate.TransactionType, "Expense", StringComparison.OrdinalIgnoreCase) && amount >= 0)
+                if (statement.StatementType == "Bank" && string.Equals(candidate.TransactionType, "Expense", StringComparison.OrdinalIgnoreCase) && amount >= 0)
                     messages.Add("Expenses must have a negative amount.");
-                if ((string.Equals(candidate.TransactionType, "Income", StringComparison.OrdinalIgnoreCase) || string.Equals(candidate.TransactionType, "Refund", StringComparison.OrdinalIgnoreCase)) && amount <= 0)
+                if (statement.StatementType == "Bank" && (string.Equals(candidate.TransactionType, "Income", StringComparison.OrdinalIgnoreCase) || string.Equals(candidate.TransactionType, "Refund", StringComparison.OrdinalIgnoreCase)) && amount <= 0)
                     messages.Add("Income and refunds must have a positive amount.");
             }
             if (!Enum.TryParse<TransactionType>(candidate.TransactionType, true, out var transactionType) || !Enum.IsDefined(transactionType))
@@ -440,7 +445,8 @@ public sealed class StatementImportService(
             var duplicateWasOverridden = candidate.DuplicateDecision?.Equals("ImportAnyway", StringComparison.OrdinalIgnoreCase) == true &&
                 duplicateChecks[candidate.SourceRowNumber].Classification is nameof(DuplicateClassification.LikelyDuplicate) or nameof(DuplicateClassification.PossibleDuplicate);
             var create = await transactionService.CreateImportedAsync(new TransactionRequest(
-                candidate.TransactionDate!.Value, candidate.Description, candidate.Amount!.Value,
+                candidate.TransactionDate!.Value, candidate.Description,
+                NormalizeImportAmount(statement.StatementType, candidate.Amount!.Value, candidate.TransactionType),
                 candidate.TransactionType, statement.FinancialAccountId, candidate.CategoryId,
                 sourceByNumber[candidate.SourceRowNumber].ReferenceNumber), duplicateWasOverridden, cancellationToken);
             if (!create.IsSuccess)
@@ -453,6 +459,7 @@ public sealed class StatementImportService(
         }
 
         statement.Status = StatementImportStatus.Processed;
+        statement.ImportedTransactionCount = selected.Length;
         statement.ProcessedAtUtc = DateTime.UtcNow;
         await repository.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -477,5 +484,16 @@ public sealed class StatementImportService(
 
     private static StatementImportDto ToDto(StatementImport statement, string accountName) =>
         new(statement.Id, statement.FinancialAccountId, accountName, statement.OriginalFileName,
-            statement.FileSizeBytes, statement.ContentType, statement.Status.ToString(), statement.UploadedAtUtc, statement.ProcessedAtUtc);
+            statement.FileSizeBytes, statement.ContentType, statement.Status.ToString(), statement.UploadedAtUtc, statement.ProcessedAtUtc, statement.StatementType, statement.ImportedTransactionCount);
+
+    private static decimal NormalizeImportAmount(string statementType, decimal sourceAmount, string? transactionType) =>
+        statementType == "CreditCard" ? transactionType?.ToLowerInvariant() switch
+        {
+            "expense" => -decimal.Abs(sourceAmount),
+            "income" or "refund" => decimal.Abs(sourceAmount),
+            _ => sourceAmount
+        } : sourceAmount;
+
+    private static decimal? NormalizePreviewAmount(string statementType, decimal? sourceAmount) =>
+        statementType == "CreditCard" && sourceAmount > 0 ? -sourceAmount : sourceAmount;
 }
