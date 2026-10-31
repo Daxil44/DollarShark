@@ -17,12 +17,14 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
     public async Task<IReadOnlyList<AccountDto>> ListAsync(bool includeInactive, CancellationToken cancellationToken) =>
         await db.FinancialAccounts.AsNoTracking().Where(x => x.UserId == UserId && (includeInactive || x.IsActive))
             .OrderBy(x => x.Name).ThenBy(x => x.Id)
-            .Select(x => new AccountDto(x.Id, x.Name, x.Institution, x.AccountType, x.Currency, x.LastFourDigits, x.IsActive, x.CreatedAtUtc))
+            .Select(x => new AccountDto(x.Id, x.Name, x.Institution, x.AccountType,
+                x.AccountType == "Credit Card" ? "Liability" : "Asset", x.Currency, x.LastFourDigits, x.IsActive, x.CreatedAtUtc))
             .ToListAsync(cancellationToken);
 
     async Task<AccountDto?> IAccountRepository.GetAsync(Guid id, CancellationToken cancellationToken) =>
         await db.FinancialAccounts.AsNoTracking().Where(x => x.Id == id && x.UserId == UserId)
-            .Select(x => new AccountDto(x.Id, x.Name, x.Institution, x.AccountType, x.Currency, x.LastFourDigits, x.IsActive, x.CreatedAtUtc))
+            .Select(x => new AccountDto(x.Id, x.Name, x.Institution, x.AccountType,
+                x.AccountType == "Credit Card" ? "Liability" : "Asset", x.Currency, x.LastFourDigits, x.IsActive, x.CreatedAtUtc))
             .SingleOrDefaultAsync(cancellationToken);
 
     Task<FinancialAccount?> IAccountRepository.FindAsync(Guid id, CancellationToken cancellationToken) =>
@@ -86,7 +88,9 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
         if (filter.AccountId is Guid accountId) query = query.Where(x => x.FinancialAccountId == accountId);
         if (filter.CategoryId is Guid categoryId) query = query.Where(x => x.CategoryId == categoryId);
         if (filter.Type is TransactionType type) query = query.Where(x => x.TransactionType == type);
-        if (!string.IsNullOrWhiteSpace(filter.Search)) query = query.Where(x => x.Description.Contains(filter.Search));
+        if (!string.IsNullOrWhiteSpace(filter.Search))
+            query = query.Where(x => x.Description.Contains(filter.Search) ||
+                (x.SubDescription != null && x.SubDescription.Contains(filter.Search)));
         if (filter.From is DateOnly from) query = query.Where(x => x.TransactionDate >= from);
         if (filter.To is DateOnly to) query = query.Where(x => x.TransactionDate <= to);
 
@@ -107,7 +111,8 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
         var items = await ordered.Skip((int)skip).Take(filter.PageSize)
             .Select(x => new TransactionDto(
                 x.Id, x.TransactionDate, x.Description, x.Amount, x.TransactionType.ToString(), x.Currency,
-                x.FinancialAccountId, x.FinancialAccount.Name, x.CategoryId, x.Category == null ? null : x.Category.Name, x.CreatedAtUtc))
+                x.FinancialAccountId, x.FinancialAccount.Name, x.CategoryId, x.Category == null ? null : x.Category.Name,
+                x.CreatedAtUtc, x.SubDescription))
             .ToListAsync(cancellationToken);
         return new TransactionPage(items, filter.Page, filter.PageSize, total,
             total == 0 ? 0 : (int)Math.Ceiling(total / (double)filter.PageSize));
@@ -117,7 +122,8 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
         await db.Transactions.AsNoTracking().Where(x => x.Id == id && x.UserId == UserId)
             .Select(x => new TransactionDto(
                 x.Id, x.TransactionDate, x.Description, x.Amount, x.TransactionType.ToString(), x.Currency,
-                x.FinancialAccountId, x.FinancialAccount.Name, x.CategoryId, x.Category == null ? null : x.Category.Name, x.CreatedAtUtc))
+                x.FinancialAccountId, x.FinancialAccount.Name, x.CategoryId, x.Category == null ? null : x.Category.Name,
+                x.CreatedAtUtc, x.SubDescription))
             .SingleOrDefaultAsync(cancellationToken);
 
     Task<Transaction?> ITransactionRepository.FindAsync(Guid id, CancellationToken cancellationToken) =>

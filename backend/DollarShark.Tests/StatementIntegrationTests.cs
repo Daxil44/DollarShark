@@ -208,14 +208,14 @@ public sealed class StatementIntegrationTests
         var (csrf, accountId) = await RegisterAndCreateAccount(owner, "import-owner@example.test");
         var (otherCsrf, otherAccountId) = await RegisterAndCreateAccount(other, "import-other@example.test");
         var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
-        var csv = Encoding.UTF8.GetBytes($"Date,Description,Amount,Currency,Reference\n{today},Coffee,-4.25,CAD,C1\n{today},Paycheck,120.00,CAD,P1\n{today},Bus,-3.00,CAD,B1\n");
+        var csv = Encoding.UTF8.GetBytes($"Date,Description,Sub-description,Amount,Currency,Reference\n{today},Coffee,Original cafe detail,-4.25,CAD,C1\n{today},Paycheck,,120.00,CAD,P1\n{today},Bus,Route 7,-3.00,CAD,B1\n");
         var uploaded = await Upload(owner, accountId, "bank.csv", csv, csrf);
         var statement = (await uploaded.Content.ReadFromJsonAsync<StatementDto>())!;
 
         var confirmBody = new { candidates = new[] {
-            new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Coffee", amount = -4.25m, transactionType = "Expense", categoryId = (Guid?)null },
-            new { sourceRowNumber = 3, selected = true, transactionDate = today, description = "Paycheck", amount = 120m, transactionType = "Income", categoryId = (Guid?)null },
-            new { sourceRowNumber = 4, selected = false, transactionDate = today, description = "Bus", amount = -3m, transactionType = "Expense", categoryId = (Guid?)null }
+            new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Coffee", subDescription = (string?)"Edited in preview", amount = -4.25m, transactionType = "Expense", categoryId = (Guid?)null },
+            new { sourceRowNumber = 3, selected = true, transactionDate = today, description = "Paycheck", subDescription = (string?)null, amount = 120m, transactionType = "Income", categoryId = (Guid?)null },
+            new { sourceRowNumber = 4, selected = false, transactionDate = today, description = "Bus", subDescription = (string?)"Route 7", amount = -3m, transactionType = "Expense", categoryId = (Guid?)null }
         }};
         Assert.Equal(HttpStatusCode.Unauthorized, (await ConfirmImport(anonymous, statement.Id, confirmBody, null)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await ParseCsv(other, statement.Id, otherCsrf)).StatusCode);
@@ -225,6 +225,8 @@ public sealed class StatementIntegrationTests
         Assert.Empty(overviewBefore.GetProperty("currencies").EnumerateArray());
         var parsed = await ParseCsv(owner, statement.Id, csrf);
         Assert.True(parsed.StatusCode == HttpStatusCode.OK, await parsed.Content.ReadAsStringAsync());
+        using (var previewJson = JsonDocument.Parse(await parsed.Content.ReadAsStringAsync()))
+            Assert.Equal("Original cafe detail", previewJson.RootElement.GetProperty("candidates")[0].GetProperty("subDescription").GetString());
         using (var scope = factory.Services.CreateScope())
             Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<FinanceDbContext>().Transactions.CountAsync());
 
@@ -238,6 +240,8 @@ public sealed class StatementIntegrationTests
         var transactions = await owner.GetFromJsonAsync<TransactionPageResponse>("/api/transactions");
         Assert.Equal(2, transactions!.TotalCount);
         Assert.Contains(transactions.Items, x => x.Amount == -4.25m && x.TransactionType == "Expense" && x.FinancialAccountId == accountId && x.Currency == "CAD");
+        Assert.Equal("Edited in preview", transactions.Items.Single(x => x.Description == "Coffee").SubDescription);
+        Assert.Null(transactions.Items.Single(x => x.Description == "Paycheck").SubDescription);
         Assert.Contains(transactions.Items, x => x.Amount == 120m && x.TransactionType == "Income");
         var overviewAfter = await owner.GetFromJsonAsync<JsonElement>("/api/dashboard/overview");
         Assert.Contains(overviewAfter.GetProperty("currencies").EnumerateArray(), item => item.GetProperty("expenses").GetDecimal() == 4.25m && item.GetProperty("income").GetDecimal() == 120m);
@@ -247,6 +251,7 @@ public sealed class StatementIntegrationTests
             Assert.Equal(StatementImportStatus.Processed, (await db.StatementImports.SingleAsync(x => x.Id == statement.Id)).Status);
             var savedTransactions = await db.Transactions.OrderBy(x => x.Description).ToListAsync();
             Assert.Equal("C1", savedTransactions.Single(x => x.Description == "Coffee").ExternalReference);
+            Assert.Equal("Edited in preview", savedTransactions.Single(x => x.Description == "Coffee").SubDescription);
             Assert.All(savedTransactions, transaction => Assert.False(transaction.DuplicateWarningOverridden));
         }
         Assert.NotEqual(accountId, otherAccountId);
@@ -640,7 +645,7 @@ public sealed class StatementIntegrationTests
         long FileSizeBytes, string ContentType, string Status, DateTime UploadedAtUtc, DateTime? ProcessedAtUtc,
         string StatementType = "Bank", int ImportedTransactionCount = 0);
     private sealed record StatementPage(IReadOnlyList<StatementDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
-    private sealed record TransactionResponse(Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string TransactionType, string Currency, Guid FinancialAccountId);
+    private sealed record TransactionResponse(Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string TransactionType, string Currency, Guid FinancialAccountId, string? SubDescription);
     private sealed record TransactionPageResponse(IReadOnlyList<TransactionResponse> Items, int Page, int PageSize, int TotalCount, int TotalPages);
     private sealed record TransactionCreatedDto(Guid Id);
     private sealed record DuplicateReviewInfo(Guid Id, string Classification);

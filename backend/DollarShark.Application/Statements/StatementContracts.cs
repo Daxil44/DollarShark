@@ -46,7 +46,8 @@ public sealed record StatementCsvPreview(
 public sealed record StatementImportCandidateChange(
     int SourceRowNumber, bool Selected, DateOnly? TransactionDate, string? Description,
     decimal? Amount, string? TransactionType, Guid? CategoryId, string? DuplicateDecision = null,
-    Guid? ReviewedDuplicateTransactionId = null, string? ReviewedDuplicateClassification = null);
+    Guid? ReviewedDuplicateTransactionId = null, string? ReviewedDuplicateClassification = null,
+    string? SubDescription = null);
 public sealed record StatementImportConfirmationRequest(IReadOnlyList<StatementImportCandidateChange>? Candidates);
 public sealed record StatementImportRejectedRow(int SourceRowNumber, IReadOnlyList<string> Messages, DuplicateCheckResult? DuplicateCheck = null);
 public sealed record StatementImportConfirmationResult(
@@ -362,6 +363,8 @@ public sealed class StatementImportService(
                 messages.Add("Enter a valid transaction date no earlier than 1900 and no later than tomorrow.");
             if (string.IsNullOrWhiteSpace(candidate.Description) || candidate.Description.Trim().Length > 300)
                 messages.Add("Description is required and must be at most 300 characters.");
+            if (candidate.SubDescription?.Trim().Length > 300)
+                messages.Add("Sub-description must be at most 300 characters.");
             if (candidate.Amount is null || candidate.Amount == 0 || decimal.Abs(candidate.Amount.Value) >= 1_000_000_000_000_000m || decimal.Round(candidate.Amount.Value, 4) != candidate.Amount.Value)
                 messages.Add("Amount must be nonzero, fit decimal(19,4), and have at most four decimal places.");
             if (source?.Currency is not null && !string.Equals(source.Currency, currency, StringComparison.OrdinalIgnoreCase))
@@ -448,7 +451,7 @@ public sealed class StatementImportService(
                 candidate.TransactionDate!.Value, candidate.Description,
                 NormalizeImportAmount(statement.StatementType, candidate.Amount!.Value, candidate.TransactionType),
                 candidate.TransactionType, statement.FinancialAccountId, candidate.CategoryId,
-                sourceByNumber[candidate.SourceRowNumber].ReferenceNumber), duplicateWasOverridden, cancellationToken);
+                sourceByNumber[candidate.SourceRowNumber].ReferenceNumber, candidate.SubDescription), duplicateWasOverridden, cancellationToken);
             if (!create.IsSuccess)
             {
                 var messages = create.Errors?.SelectMany(x => x.Value).Distinct().ToArray() ?? [create.Title ?? "The transaction could not be saved."];

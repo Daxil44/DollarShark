@@ -205,11 +205,11 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                     b.Property<long>("FileSizeBytes")
                         .HasColumnType("bigint");
 
-                    b.Property<int>("ImportedTransactionCount")
-                        .HasColumnType("int");
-
                     b.Property<Guid>("FinancialAccountId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ImportedTransactionCount")
+                        .HasColumnType("int");
 
                     b.Property<string>("OriginalFileName")
                         .IsRequired()
@@ -219,17 +219,17 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("ProcessedAtUtc")
                         .HasColumnType("datetime2");
 
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
                     b.Property<string>("StatementType")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)")
                         .HasDefaultValue("Bank");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
 
                     b.Property<string>("StorageKey")
                         .IsRequired()
@@ -272,10 +272,6 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
-                    b.Property<bool>("DuplicateWarningOverridden")
-                        .HasColumnType("bit")
-                        .HasDefaultValue(false);
-
                     b.Property<string>("Currency")
                         .IsRequired()
                         .HasMaxLength(3)
@@ -286,12 +282,21 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
 
+                    b.Property<bool>("DuplicateWarningOverridden")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("ExternalReference")
                         .HasMaxLength(255)
                         .HasColumnType("nvarchar(255)");
 
                     b.Property<Guid>("FinancialAccountId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("SubDescription")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
 
                     b.Property<DateOnly>("TransactionDate")
                         .HasColumnType("date");
@@ -313,10 +318,10 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.HasIndex("FinancialAccountId", "TransactionDate");
-
                     b.HasIndex("FinancialAccountId", "ExternalReference")
                         .HasFilter("[ExternalReference] IS NOT NULL");
+
+                    b.HasIndex("FinancialAccountId", "TransactionDate");
 
                     b.ToTable("Transactions");
                 });

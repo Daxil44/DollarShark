@@ -172,10 +172,11 @@ export default function StatementsPage() {
     setParsingId(statement.id);
     try {
       const response = await api.post<StatementCsvPreview>(`/api/statements/${statement.id}/parse-csv`);
+      const account = accounts.find(candidate => candidate.id === statement.financialAccountId);
       const rows = response.data.candidates.map(candidate => ({
         ...candidate,
         selected: false,
-        transactionType: statement.statementType === 'Bank' ? (candidate.amount !== null && candidate.amount > 0 ? 'Income' : candidate.amount !== null && candidate.amount < 0 ? 'Expense' : '') : (candidate.amount !== null && candidate.amount > 0 ? 'Expense' : ''),
+        transactionType: account?.accountType === 'Investment' ? '' : statement.statementType === 'Bank' ? (candidate.amount !== null && candidate.amount > 0 ? 'Income' : candidate.amount !== null && candidate.amount < 0 ? 'Expense' : '') : (candidate.amount !== null && candidate.amount > 0 ? 'Expense' : ''),
         categoryId: null,
         duplicateDecision: candidate.duplicateCheck?.classification === 'LikelyDuplicate' || candidate.duplicateCheck?.classification === 'PossibleDuplicate' ? 'Unresolved' as const : null
       }));
@@ -258,6 +259,7 @@ export default function StatementsPage() {
     const candidates: StatementImportCandidateChange[] = csvPreview.rows.map(row => ({
       sourceRowNumber: row.sourceRowNumber, selected: row.selected,
       transactionDate: row.transactionDate, description: row.description,
+      subDescription: row.subDescription ?? null,
       amount: row.amount, transactionType: row.transactionType, categoryId: row.categoryId,
       duplicateDecision: row.duplicateDecision,
       reviewedDuplicateTransactionId: row.duplicateCheck?.existingTransactionId ?? null,
@@ -352,7 +354,7 @@ export default function StatementsPage() {
         </div>
         {csvPreview.rows.length === 0 ? <p className="text-secondary">The CSV contains no transaction rows.</p> :
           <Table responsive bordered size="sm" className="align-middle mb-0">
-            <thead><tr><th>Select</th><th>Source row</th><th>Transaction date</th><th>Description</th><th>Amount</th><th>Type</th><th>Category</th><th>Currency / reference</th><th>Status / duplicate review</th></tr></thead>
+            <thead><tr><th>Select</th><th>Source row</th><th>Transaction date</th><th>Description</th><th>Sub-description</th><th>Amount</th><th>Type</th><th>Category</th><th>Currency / reference</th><th>Status / duplicate review</th></tr></thead>
             <tbody>{filteredRows.map(row => {
               const messages = rowMessages(row, statementAccount?.currency ?? 'CAD', csvPreview.statement.statementType);
               const valid = messages.length === 0;
@@ -368,6 +370,7 @@ export default function StatementsPage() {
               <td>{row.sourceRowNumber}</td>
               <td><Form.Control aria-label={`Transaction date row ${row.sourceRowNumber}`} type="date" size="sm" value={row.transactionDate ?? ''} onChange={event => editRow(row.sourceRowNumber, { transactionDate: event.currentTarget.value || null })} />{row.postedDate && <div className="small text-secondary mt-1">Posted: {row.postedDate}</div>}</td>
               <td><Form.Control aria-label={`Description row ${row.sourceRowNumber}`} size="sm" value={row.description} onChange={event => editRow(row.sourceRowNumber, { description: event.currentTarget.value })} />{row.referenceNumber && <div className="small text-secondary mt-1">Ref: {row.referenceNumber}</div>}</td>
+              <td><Form.Control aria-label={`Sub-description row ${row.sourceRowNumber}`} size="sm" value={row.subDescription ?? ''} onChange={event => editRow(row.sourceRowNumber, { subDescription: event.currentTarget.value || null })} /></td>
               <td><div className="small text-secondary">Source: {row.sourceAmount ?? row.amount ?? '—'}</div><Form.Control aria-label={`Amount row ${row.sourceRowNumber}`} type="number" step="0.0001" size="sm" value={row.amount ?? ''} onChange={event => editRow(row.sourceRowNumber, { amount: event.currentTarget.value === '' ? null : Number(event.currentTarget.value) })} /><div className={`small fw-semibold text-${typeTone}`}>Normalized: {normalized === null ? 'Choose type' : normalized.toFixed(2)}</div></td>
               <td><Form.Select aria-label={`Type row ${row.sourceRowNumber}`} size="sm" value={row.transactionType} onChange={event => editRow(row.sourceRowNumber, { transactionType: event.currentTarget.value })}><option value="">Choose type</option><option>Expense</option><option>Income</option><option>Refund</option><option>Transfer</option></Form.Select><Badge bg={typeTone} className="mt-1">{row.transactionType || 'Review type'}</Badge></td>
               <td><Form.Select aria-label={`Category row ${row.sourceRowNumber}`} size="sm" value={row.categoryId ?? ''} disabled={!valid || confirming || row.duplicateDecision === 'Skip'} onChange={event => editRow(row.sourceRowNumber, { categoryId: event.currentTarget.value || null })}><option value="">Uncategorized</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</Form.Select></td>

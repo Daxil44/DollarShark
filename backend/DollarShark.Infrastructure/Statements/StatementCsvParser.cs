@@ -12,6 +12,7 @@ public sealed class StatementCsvParser : IStatementCsvParser
     private static readonly string[] TransactionDateHeaders = ["transaction date", "transactiondate", "trans date", "transdate", "date"];
     private static readonly string[] PostedDateHeaders = ["posted date", "posteddate", "posting date", "postingdate", "post date", "postdate", "date processed", "dateprocessed"];
     private static readonly string[] DescriptionHeaders = ["description", "transaction description", "transactiondescription", "details", "memo", "merchant", "payee", "narrative"];
+    private static readonly string[] SubDescriptionHeaders = ["sub-description", "sub description", "subdescription"];
     private static readonly string[] SignedAmountHeaders = ["amount", "transaction amount", "transactionamount", "signed amount", "signedamount"];
     private static readonly string[] DebitHeaders = ["debit", "debit amount", "debitamount", "withdrawal", "withdrawals", "money out"];
     private static readonly string[] CreditHeaders = ["credit", "credit amount", "creditamount", "deposit", "deposits", "money in"];
@@ -88,6 +89,7 @@ public sealed class StatementCsvParser : IStatementCsvParser
     {
         var date = Resolve(headers, TransactionDateHeaders, "transaction date");
         var description = Resolve(headers, DescriptionHeaders, "description");
+        var subDescription = Resolve(headers, SubDescriptionHeaders, "sub-description", required: false);
         var amount = Resolve(headers, SignedAmountHeaders, "signed amount", required: false);
         var debit = Resolve(headers, DebitHeaders, "debit", required: false);
         var credit = Resolve(headers, CreditHeaders, "credit", required: false);
@@ -102,7 +104,7 @@ public sealed class StatementCsvParser : IStatementCsvParser
         if (amount is null && (debit is null || credit is null))
             throw new StatementCsvFormatException("Separate amount format requires both Debit and Credit columns.");
 
-        return new ColumnMapping(date!.Value, postedDate, description!.Value, amount, debit, credit, currency, reference);
+        return new ColumnMapping(date!.Value, postedDate, description!.Value, subDescription, amount, debit, credit, currency, reference);
     }
 
     private static int? Resolve(string[] headers, string[] aliases, string fieldName, bool required = true)
@@ -139,6 +141,9 @@ public sealed class StatementCsvParser : IStatementCsvParser
 
         var description = Field(csv, mapping.Description)?.Trim() ?? string.Empty;
         if (description.Length == 0) errors.Add("Description is required.");
+        var subDescription = mapping.SubDescription is { } subDescriptionIndex
+            ? NullIfBlank(Field(csv, subDescriptionIndex))
+            : null;
 
         decimal? amount;
         if (mapping.Amount is { } amountIndex)
@@ -171,7 +176,7 @@ public sealed class StatementCsvParser : IStatementCsvParser
         var reference = mapping.Reference is { } referenceIndex ? NullIfBlank(Field(csv, referenceIndex)) : null;
 
         return new StatementCsvCandidate(rowNumber, transactionDate, postedDate, description, amount, currency, reference,
-            errors, errors.Count == 0 ? "Valid" : "Invalid", SourceAmount: amount);
+            errors, errors.Count == 0 ? "Valid" : "Invalid", SubDescription: subDescription, SourceAmount: amount);
     }
 
     private static DateOnly? ParseDate(string? value)
@@ -203,6 +208,6 @@ public sealed class StatementCsvParser : IStatementCsvParser
         new(rowNumber, null, null, string.Empty, null, null, null, [error], "Invalid");
 
     private sealed record ColumnMapping(
-        int TransactionDate, int? PostedDate, int Description, int? Amount, int? Debit, int? Credit,
+        int TransactionDate, int? PostedDate, int Description, int? SubDescription, int? Amount, int? Debit, int? Credit,
         int? Currency, int? Reference);
 }
