@@ -15,7 +15,8 @@ public sealed class StatementsController(
     public async Task<IActionResult> Upload(
         [FromForm] Guid financialAccountId,
         [FromForm] IFormFile? file,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        [FromForm] string statementType = "Bank")
     {
         if (file is null) return BadRequest(new { title = "Choose a statement file." });
 
@@ -23,7 +24,7 @@ public sealed class StatementsController(
         {
             await using var content = file.OpenReadStream();
             var result = await service.UploadAsync(
-                new StatementUploadCommand(financialAccountId, file.FileName, file.Length, content), cancellationToken);
+                new StatementUploadCommand(financialAccountId, file.FileName, file.Length, content, statementType), cancellationToken);
             return result.IsSuccess
                 ? CreatedAtAction(nameof(Get), new { id = result.Value!.Id }, result.Value)
                 : Failure(result);

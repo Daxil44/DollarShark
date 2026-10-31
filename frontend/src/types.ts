@@ -73,6 +73,8 @@ export type StatementImport = {
   status: string;
   uploadedAtUtc: string;
   processedAtUtc: string | null;
+  statementType: 'Bank' | 'CreditCard';
+  importedTransactionCount: number;
 };
 
 export type StatementImportPage = {
@@ -94,6 +96,10 @@ export type StatementCsvCandidate = {
   validationMessages: string[];
   status: 'Valid' | 'Invalid';
   duplicateCheck?: DuplicateCheck | null;
+  subDescription?: string | null;
+  sourceTransactionType?: string | null;
+  sourceAmount?: number | null;
+  suggestedTransactionType?: string | null;
 };
 
 export type DuplicateCheck = {

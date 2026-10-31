@@ -273,6 +273,49 @@ public sealed class StatementIntegrationTests
     }
 
     [Fact]
+    public async Task CreditCardConfirmationNormalizesByReviewedTypeAndPreservesTransfers()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "credit-card-signs@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var csv = Encoding.UTF8.GetBytes($"Date,Description,Amount\n{today},Purchase,42.50\n{today},Refund,-10.00\n{today},Card payment,-100.00\n");
+        var upload = await Upload(client, accountId, "card.csv", csv, csrf, statementType: "CreditCard");
+        Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
+        var statement = (await upload.Content.ReadFromJsonAsync<StatementDto>())!;
+        Assert.Equal("CreditCard", statement.StatementType);
+
+        var body = new { candidates = new[] {
+            new { sourceRowNumber = 2, selected = true, transactionDate = today, description = "Purchase", amount = 42.50m, transactionType = "Expense", categoryId = (Guid?)null },
+            new { sourceRowNumber = 3, selected = true, transactionDate = today, description = "Refund", amount = -10m, transactionType = "Refund", categoryId = (Guid?)null },
+            new { sourceRowNumber = 4, selected = true, transactionDate = today, description = "Card payment", amount = -100m, transactionType = "Transfer", categoryId = (Guid?)null }
+        }};
+        var confirmed = await ConfirmImport(client, statement.Id, body, csrf);
+        Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
+        var transactions = await client.GetFromJsonAsync<TransactionPageResponse>("/api/transactions");
+        Assert.Contains(transactions!.Items, x => x.Description == "Purchase" && x.Amount == -42.50m && x.TransactionType == "Expense");
+        Assert.Contains(transactions.Items, x => x.Description == "Refund" && x.Amount == 10m && x.TransactionType == "Refund");
+        Assert.Contains(transactions.Items, x => x.Description == "Card payment" && x.Amount == -100m && x.TransactionType == "Transfer");
+    }
+
+    [Fact]
+    public async Task CreditCardDuplicatePreviewUsesNormalizedPurchaseAmount()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "credit-card-duplicate@example.test");
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var existing = await PostJson(client, "/api/transactions", new { transactionDate = today, description = "Card purchase", amount = -42.50m, transactionType = "Expense", financialAccountId = accountId, categoryId = (Guid?)null, externalReference = (string?)null }, csrf);
+        Assert.Equal(HttpStatusCode.Created, existing.StatusCode);
+        var uploaded = await Upload(client, accountId, "card-repeat.csv", Encoding.UTF8.GetBytes($"Date,Description,Amount\n{today},Card purchase,42.50\n"), csrf, statementType: "CreditCard");
+        var statement = (await uploaded.Content.ReadFromJsonAsync<StatementDto>())!;
+        var parsed = await ParseCsv(client, statement.Id, csrf);
+        Assert.Equal(HttpStatusCode.OK, parsed.StatusCode);
+        using var json = JsonDocument.Parse(await parsed.Content.ReadAsStringAsync());
+        Assert.Equal("LikelyDuplicate", json.RootElement.GetProperty("candidates")[0].GetProperty("duplicateCheck").GetProperty("classification").GetString());
+    }
+
+    [Fact]
     public async Task FailedTransactionBatchRollsBackEveryRowAndCanBeRetried()
     {
         await using var factory = new StatementApiFactory();
@@ -534,10 +577,11 @@ public sealed class StatementIntegrationTests
     }
 
     private static async Task<HttpResponseMessage> Upload(
-        HttpClient client, Guid accountId, string fileName, byte[] bytes, string? csrf, string declaredContentType = "application/octet-stream")
+        HttpClient client, Guid accountId, string fileName, byte[] bytes, string? csrf, string declaredContentType = "application/octet-stream", string statementType = "Bank")
     {
         using var content = new MultipartFormDataContent();
         content.Add(new StringContent(accountId.ToString()), "financialAccountId");
+        content.Add(new StringContent(statementType), "statementType");
         var filePart = new ByteArrayContent(bytes);
         filePart.Headers.ContentType = MediaTypeHeaderValue.Parse(declaredContentType);
         content.Add(filePart, "file", fileName);
@@ -591,7 +635,8 @@ public sealed class StatementIntegrationTests
     private sealed record AccountDto(Guid Id);
     private sealed record StatementDto(
         Guid Id, Guid FinancialAccountId, string AccountName, string OriginalFileName,
-        long FileSizeBytes, string ContentType, string Status, DateTime UploadedAtUtc, DateTime? ProcessedAtUtc);
+        long FileSizeBytes, string ContentType, string Status, DateTime UploadedAtUtc, DateTime? ProcessedAtUtc,
+        string StatementType = "Bank", int ImportedTransactionCount = 0);
     private sealed record StatementPage(IReadOnlyList<StatementDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
     private sealed record TransactionResponse(Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string TransactionType, string Currency, Guid FinancialAccountId);
     private sealed record TransactionPageResponse(IReadOnlyList<TransactionResponse> Items, int Page, int PageSize, int TotalCount, int TotalPages);

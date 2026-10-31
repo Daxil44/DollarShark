@@ -49,7 +49,7 @@ public sealed class StatementImportRepository(FinanceDbContext db) : IStatementI
 
     private static IQueryable<StatementImportDto> Project(IQueryable<StatementImport> query) =>
         query.Select(x => new StatementImportDto(x.Id, x.FinancialAccountId, x.FinancialAccount.Name,
-            x.OriginalFileName, x.FileSizeBytes, x.ContentType, x.Status.ToString(), x.UploadedAtUtc, x.ProcessedAtUtc));
+            x.OriginalFileName, x.FileSizeBytes, x.ContentType, x.Status.ToString(), x.UploadedAtUtc, x.ProcessedAtUtc, x.StatementType, x.ImportedTransactionCount));
 
     private sealed class StatementImportTransaction(IDbContextTransaction transaction) : IStatementImportTransaction
     {
