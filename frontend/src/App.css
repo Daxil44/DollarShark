@@ -1,7 +1,11 @@
 .app-shell { min-height: 100vh; color: #172c2b; }
 .topbar { min-height: 72px; background: #fff; border-bottom: 1px solid #e7eeeb; }
-.brand { color: #173d38 !important; font-weight: 750; letter-spacing: -.04em; font-size: 1.3rem; display: flex; gap: .55rem; align-items: center; }
-.brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: #d9f3e7; color: #167553; font-size: 1rem; }
+.brand { color: #173d38 !important; font-weight: 750; letter-spacing: -.04em; font-size: 1.3rem; display: flex; align-items: center; text-decoration: none; }
+.dollarshark-brand { display: inline-flex; align-items: center; gap: .62rem; color: #123c46; }
+.dollarshark-mark { display: block; width: 38px; height: 38px; flex: 0 0 auto; }
+.dollarshark-wordmark { color: #123c46; font-size: 1.28rem; font-weight: 800; letter-spacing: -.055em; white-space: nowrap; }
+.dollarshark-wordmark span { color: #16845d; }
+.auth-card .dollarshark-mark { width: 44px; height: 44px; }
 .topbar .nav-link { color: #62716f; font-weight: 550; margin-left: .5rem; }
 .topbar .nav-link.active, .topbar .nav-link:hover { color: #167553; }
 .local-label { color: #647471; font-size: .85rem; display: flex; align-items: center; gap: .45rem; }
@@ -20,7 +24,15 @@
 .stat-card, .content-card { border: 1px solid #e5ece9; border-radius: 14px; box-shadow: 0 5px 18px rgba(27, 66, 56, .035); }
 .stat-card .card-body { padding: 1.25rem 1.35rem; }
 .stat-value { font-size: 2rem; font-weight: 700; letter-spacing: -.045em; margin-top: .55rem; }
+.dashboard-stat-value { font-size: clamp(1.35rem, 2.2vw, 1.9rem); white-space: nowrap; }
 .stat-note { color: #7b8986; font-size: .83rem; margin-top: .2rem; }
+.dashboard-currency-select { width: auto; min-width: 6rem; }
+.dashboard-donut { width: 100%; height: 270px; }
+.dashboard-bar { width: 100%; height: 320px; }
+.chart-empty { display: grid; min-height: 270px; place-items: center; padding: 1.5rem; color: #788783; text-align: center; background: #f8faf9; border-radius: 10px; }
+.category-breakdown { display: grid; gap: .55rem; margin-top: .75rem; }
+.category-breakdown-row { display: grid; grid-template-columns: 10px minmax(4rem, 1fr) 3rem auto; align-items: center; gap: .6rem; font-size: .84rem; }
+.category-swatch { width: 9px; height: 9px; border-radius: 3px; }
 .content-card .card-body { padding: 1.4rem; }
 .section-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 .25rem; }
 .empty-state { text-align: center; padding: 3.2rem 1rem 3rem; border-top: 1px solid #eef2f0; }

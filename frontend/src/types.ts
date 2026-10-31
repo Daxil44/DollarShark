@@ -149,6 +149,19 @@ export type DashboardCurrencySummary = {
   previousNetCashFlow: number;
 };
 
+export type DashboardCategoryExpense = {
+  currency: string;
+  categoryName: string;
+  amount: number;
+};
+
+export type DashboardMonthlyTotals = {
+  currency: string;
+  month: string;
+  income: number;
+  expenses: number;
+};
+
 export type DashboardRecentTransaction = {
   id: string;
   transactionDate: string;
@@ -167,4 +180,6 @@ export type DashboardOverview = {
   previousPeriodEnd: string;
   currencies: DashboardCurrencySummary[];
   recentTransactions: DashboardRecentTransaction[];
+  categoryExpenses: DashboardCategoryExpense[];
+  monthlyTotals: DashboardMonthlyTotals[];
 };

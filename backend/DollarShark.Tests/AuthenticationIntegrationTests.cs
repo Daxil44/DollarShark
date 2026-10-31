@@ -4,6 +4,7 @@ using System.Text.Json;
 using DollarShark.Infrastructure.Identity;
 using DollarShark.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -12,6 +13,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Data.Sqlite;
 
@@ -135,13 +137,15 @@ public sealed class AuthenticationIntegrationTests
         await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-24", 5m, "Refund", "October refund");
         await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-12", 200m, "Transfer", "Transfer in");
         await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-13", -200m, "Transfer", "Transfer out");
+        await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-10-20", -7m, "Expense", "October coffee");
         await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-09-07", 70m, "Income", "September salary");
         await CreateTransaction(userB, csrfB, accountB.Id, null, "2026-09-30", -10m, "Expense", "September expense");
         await CreateTransaction(userB, csrfB, accountBUsd.Id, null, "2026-10-24", 30m, "Income", "USD income");
         await CreateTransaction(userB, csrfB, accountBUsd.Id, null, "2026-10-23", 1.25m, "Refund", "USD refund");
 
-        using var dashboardA = JsonDocument.Parse(await (await userA.GetAsync(
-            "/api/dashboard/overview?from=2026-10-01&to=2026-10-24")).Content.ReadAsStringAsync());
+        var dashboardAResponse = await userA.GetAsync("/api/dashboard/overview?from=2026-10-01&to=2026-10-24");
+        Assert.True(dashboardAResponse.IsSuccessStatusCode, await dashboardAResponse.Content.ReadAsStringAsync());
+        using var dashboardA = JsonDocument.Parse(await dashboardAResponse.Content.ReadAsStringAsync());
         Assert.Empty(dashboardA.RootElement.GetProperty("currencies").EnumerateArray());
         Assert.Empty(dashboardA.RootElement.GetProperty("recentTransactions").EnumerateArray());
 
@@ -152,8 +156,8 @@ public sealed class AuthenticationIntegrationTests
         Assert.Equal(2, currencyTotals.Length);
         var cad = Assert.Single(currencyTotals, item => item.GetProperty("currency").GetString() == "CAD");
         Assert.Equal(105m, cad.GetProperty("income").GetDecimal());
-        Assert.Equal(12.5m, cad.GetProperty("expenses").GetDecimal());
-        Assert.Equal(92.5m, cad.GetProperty("netCashFlow").GetDecimal());
+        Assert.Equal(19.5m, cad.GetProperty("expenses").GetDecimal());
+        Assert.Equal(85.5m, cad.GetProperty("netCashFlow").GetDecimal());
         Assert.Equal(70m, cad.GetProperty("previousIncome").GetDecimal());
         Assert.Equal(10m, cad.GetProperty("previousExpenses").GetDecimal());
         Assert.Equal(60m, cad.GetProperty("previousNetCashFlow").GetDecimal());
@@ -162,6 +166,21 @@ public sealed class AuthenticationIntegrationTests
         Assert.Equal(0m, usd.GetProperty("expenses").GetDecimal());
         Assert.Equal(31.25m, usd.GetProperty("netCashFlow").GetDecimal());
         Assert.Equal(0m, usd.GetProperty("previousIncome").GetDecimal());
+        var categoryExpenses = dashboardRoot.GetProperty("categoryExpenses").EnumerateArray().ToArray();
+        Assert.Equal(2, categoryExpenses.Length);
+        var uncategorized = Assert.Single(categoryExpenses, item => item.GetProperty("categoryName").GetString() == "Uncategorized");
+        Assert.Equal("CAD", uncategorized.GetProperty("currency").GetString());
+        Assert.Equal(7m, uncategorized.GetProperty("amount").GetDecimal());
+        var categorized = Assert.Single(categoryExpenses, item => item.GetProperty("categoryName").GetString() == "B private");
+        Assert.Equal(12.5m, categorized.GetProperty("amount").GetDecimal());
+        var monthlyTotals = dashboardRoot.GetProperty("monthlyTotals").EnumerateArray().ToArray();
+        var cadOctober = Assert.Single(monthlyTotals, item => item.GetProperty("currency").GetString() == "CAD");
+        Assert.Equal("2026-10", cadOctober.GetProperty("month").GetString());
+        Assert.Equal(105m, cadOctober.GetProperty("income").GetDecimal());
+        Assert.Equal(19.5m, cadOctober.GetProperty("expenses").GetDecimal());
+        var usdOctober = Assert.Single(monthlyTotals, item => item.GetProperty("currency").GetString() == "USD");
+        Assert.Equal(31.25m, usdOctober.GetProperty("income").GetDecimal());
+        Assert.Equal(0m, usdOctober.GetProperty("expenses").GetDecimal());
         var recent = dashboardRoot.GetProperty("recentTransactions").EnumerateArray().ToArray();
         Assert.Equal(3, recent.Length);
         Assert.Equal("2026-10-24", recent[0].GetProperty("transactionDate").GetString());
@@ -321,10 +340,12 @@ public sealed class AuthenticationIntegrationTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment(environment);
+            builder.ConfigureLogging(logging => logging.ClearProviders());
             if (environment == "Production")
                 builder.UseSetting("FrontendOrigin", "https://app.example.test");
             builder.ConfigureServices(services =>
             {
+                services.AddDataProtection().UseEphemeralDataProtectionProvider();
                 services.RemoveAll<IDbContextOptionsConfiguration<FinanceDbContext>>();
                 services.RemoveAll<DbContextOptions<FinanceDbContext>>();
                 services.RemoveAll<FinanceDbContext>();

@@ -3,6 +3,7 @@ import { Alert, Button, Card, Container, Form, Spinner } from 'react-bootstrap';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { apiErrorMessage } from '../api';
 import { useAuth } from '../auth';
+import DollarSharkLogo from '../components/DollarSharkLogo';
 
 export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const { user, login, register } = useAuth();
@@ -13,9 +14,10 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const isRegister = mode === 'register';
-  const destination = (location.state as { from?: string } | null)?.from ?? '/';
+  const from = (location.state as { from?: string | { pathname?: string; search?: string; hash?: string } } | null)?.from;
+  const destination = typeof from === 'string' ? from : from?.pathname ? `${from.pathname}${from.search ?? ''}${from.hash ?? ''}` : '/dashboard';
 
-  if (user) return <Navigate to="/" replace />;
+  if (user) return <Navigate to={destination === '/login' || destination === '/register' ? '/dashboard' : destination} replace />;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -34,7 +36,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
 
   return <main className="auth-background"><Container className="auth-container">
     <Card className="auth-card"><Card.Body>
-      <div className="brand mb-4"><span className="brand-mark">$</span> DollarShark</div>
+      <div className="brand mb-4"><DollarSharkLogo /></div>
       <h1 className="h3 fw-bold">{isRegister ? 'Create your account' : 'Welcome back'}</h1>
       <p className="text-secondary">{isRegister ? 'Your finance data will be private to your account.' : 'Sign in to see your private finance workspace.'}</p>
       {error && <Alert variant="danger">{error}</Alert>}
