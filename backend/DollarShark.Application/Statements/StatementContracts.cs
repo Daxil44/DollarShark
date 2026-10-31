@@ -33,7 +33,11 @@ public sealed record StatementCsvCandidate(
     string? ReferenceNumber,
     IReadOnlyList<string> ValidationMessages,
     string Status,
-    DuplicateCheckResult? DuplicateCheck = null);
+    DuplicateCheckResult? DuplicateCheck = null,
+    string? SubDescription = null,
+    string? SourceTransactionType = null,
+    decimal? SourceAmount = null,
+    string? SuggestedTransactionType = null);
 public sealed record StatementCsvPreview(
     IReadOnlyList<StatementCsvCandidate> Candidates,
     int ValidRows,
