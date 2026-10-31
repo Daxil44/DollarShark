@@ -14,18 +14,47 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
         ? throw new InvalidOperationException("A signed-in user is required for finance data access.")
         : currentUser.UserId;
 
-    public async Task<IReadOnlyList<AccountDto>> ListAsync(bool includeInactive, CancellationToken cancellationToken) =>
-        await db.FinancialAccounts.AsNoTracking().Where(x => x.UserId == UserId && (includeInactive || x.IsActive))
-            .OrderBy(x => x.Name).ThenBy(x => x.Id)
-            .Select(x => new AccountDto(x.Id, x.Name, x.Institution, x.AccountType,
-                x.AccountType == "Credit Card" ? "Liability" : "Asset", x.Currency, x.LastFourDigits, x.IsActive, x.CreatedAtUtc))
-            .ToListAsync(cancellationToken);
+    public async Task<IReadOnlyList<AccountDto>> ListAsync(bool includeInactive, CancellationToken cancellationToken)
+    {
+        var accounts = await db.FinancialAccounts.AsNoTracking()
+            .Where(x => x.UserId == UserId && (includeInactive || x.IsActive))
+            .OrderBy(x => x.Name).ThenBy(x => x.Id).ToListAsync(cancellationToken);
+        return await ToAccountDtosAsync(accounts, cancellationToken);
+    }
 
-    async Task<AccountDto?> IAccountRepository.GetAsync(Guid id, CancellationToken cancellationToken) =>
-        await db.FinancialAccounts.AsNoTracking().Where(x => x.Id == id && x.UserId == UserId)
-            .Select(x => new AccountDto(x.Id, x.Name, x.Institution, x.AccountType,
-                x.AccountType == "Credit Card" ? "Liability" : "Asset", x.Currency, x.LastFourDigits, x.IsActive, x.CreatedAtUtc))
-            .SingleOrDefaultAsync(cancellationToken);
+    async Task<AccountDto?> IAccountRepository.GetAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var account = await db.FinancialAccounts.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == id && x.UserId == UserId, cancellationToken);
+        if (account is null) return null;
+        return (await ToAccountDtosAsync([account], cancellationToken)).Single();
+    }
+
+    private async Task<IReadOnlyList<AccountDto>> ToAccountDtosAsync(
+        IReadOnlyList<FinancialAccount> accounts, CancellationToken cancellationToken)
+    {
+        var configuredAccounts = accounts.Where(x => x.OpeningBalance.HasValue && x.OpeningBalanceDate.HasValue).ToArray();
+        var movements = new List<Transaction>();
+        if (configuredAccounts.Length > 0)
+        {
+            var accountIds = configuredAccounts.Select(x => x.Id).ToArray();
+            var earliestOpeningDate = configuredAccounts.Min(x => x.OpeningBalanceDate!.Value);
+            movements = await db.Transactions.AsNoTracking()
+                .Where(x => x.UserId == UserId && accountIds.Contains(x.FinancialAccountId) && x.TransactionDate > earliestOpeningDate)
+                .Select(x => new Transaction
+                {
+                    FinancialAccountId = x.FinancialAccountId,
+                    TransactionDate = x.TransactionDate,
+                    Amount = x.Amount,
+                    TransactionType = x.TransactionType
+                }).ToListAsync(cancellationToken);
+        }
+
+        return accounts.Select(account => new AccountDto(
+            account.Id, account.Name, account.Institution, account.AccountType, account.Classification.ToString(),
+            account.Currency, account.LastFourDigits, account.OpeningBalance, account.OpeningBalanceDate,
+            account.CalculateBalance(movements), account.IsActive, account.CreatedAtUtc)).ToArray();
+    }
 
     Task<FinancialAccount?> IAccountRepository.FindAsync(Guid id, CancellationToken cancellationToken) =>
         db.FinancialAccounts.SingleOrDefaultAsync(x => x.Id == id && x.UserId == UserId, cancellationToken);

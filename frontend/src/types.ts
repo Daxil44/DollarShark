@@ -6,6 +6,9 @@ export type Account = {
   classification: 'Asset' | 'Liability';
   currency: string;
   lastFourDigits: string | null;
+  openingBalance: number | null;
+  openingBalanceDate: string | null;
+  calculatedBalance: number | null;
   isActive: boolean;
   createdAtUtc: string;
 };
@@ -16,6 +19,8 @@ export type AccountInput = {
   accountType: string;
   currency: string;
   lastFourDigits: string;
+  openingBalance: string;
+  openingBalanceDate: string;
 };
 
 export type Category = {

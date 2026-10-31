@@ -172,6 +172,13 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                         .HasMaxLength(120)
                         .HasColumnType("nvarchar(120)");
 
+                    b.Property<decimal?>("OpeningBalance")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<DateOnly?>("OpeningBalanceDate")
+                        .HasColumnType("date");
+
                     b.Property<string>("UserId")
                         .HasMaxLength(450)
                         .HasColumnType("nvarchar(450)");
@@ -182,7 +189,10 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("Institution", "Name");
 
-                    b.ToTable("FinancialAccounts");
+                    b.ToTable("FinancialAccounts", t =>
+                        {
+                            t.HasCheckConstraint("CK_FinancialAccounts_OpeningBalance", "([OpeningBalance] IS NULL AND [OpeningBalanceDate] IS NULL) OR ([OpeningBalance] IS NOT NULL AND [OpeningBalanceDate] IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("DollarShark.Domain.StatementImport", b =>
