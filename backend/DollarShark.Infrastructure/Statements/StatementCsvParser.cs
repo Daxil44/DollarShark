@@ -10,7 +10,7 @@ namespace DollarShark.Infrastructure.Statements;
 public sealed class StatementCsvParser : IStatementCsvParser
 {
     private static readonly string[] TransactionDateHeaders = ["transaction date", "transactiondate", "trans date", "transdate", "date"];
-    private static readonly string[] PostedDateHeaders = ["posted date", "posteddate", "posting date", "postingdate", "post date", "postdate"];
+    private static readonly string[] PostedDateHeaders = ["posted date", "posteddate", "posting date", "postingdate", "post date", "postdate", "date processed", "dateprocessed"];
     private static readonly string[] DescriptionHeaders = ["description", "transaction description", "transactiondescription", "details", "memo", "merchant", "payee", "narrative"];
     private static readonly string[] SignedAmountHeaders = ["amount", "transaction amount", "transactionamount", "signed amount", "signedamount"];
     private static readonly string[] DebitHeaders = ["debit", "debit amount", "debitamount", "withdrawal", "withdrawals", "money out"];
@@ -19,7 +19,7 @@ public sealed class StatementCsvParser : IStatementCsvParser
     private static readonly string[] ReferenceHeaders = ["reference", "reference number", "referencenumber", "reference id", "referenceid", "transaction id", "transactionid", "check number", "checknumber", "ref no"];
     private static readonly string[] DateFormats = [
         "yyyy-MM-dd", "yyyy-M-d", "yyyy/MM/dd", "M/d/yyyy", "MM/dd/yyyy", "M/d/yy", "MM/dd/yy",
-        "yyyyMMdd", "d-MMM-yyyy", "dd-MMM-yyyy", "MMM d, yyyy", "MMMM d, yyyy"
+        "yyyyMMdd", "d-MMM-yyyy", "dd-MMM-yyyy", "d MMM yyyy", "dd MMM yyyy", "MMM d, yyyy", "MMMM d, yyyy"
     ];
     private static readonly Regex NumericAmount = new(
         @"^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,4})?$",
@@ -171,7 +171,7 @@ public sealed class StatementCsvParser : IStatementCsvParser
         var reference = mapping.Reference is { } referenceIndex ? NullIfBlank(Field(csv, referenceIndex)) : null;
 
         return new StatementCsvCandidate(rowNumber, transactionDate, postedDate, description, amount, currency, reference,
-            errors, errors.Count == 0 ? "Valid" : "Invalid");
+            errors, errors.Count == 0 ? "Valid" : "Invalid", SourceAmount: amount);
     }
 
     private static DateOnly? ParseDate(string? value)
