@@ -3,6 +3,7 @@ export type Account = {
   name: string;
   institution: string;
   accountType: string;
+  classification: 'Asset' | 'Liability';
   currency: string;
   lastFourDigits: string | null;
   isActive: boolean;
@@ -36,6 +37,7 @@ export type Transaction = {
   id: string;
   transactionDate: string;
   description: string;
+  subDescription: string | null;
   amount: number;
   transactionType: string;
   currency: string;
@@ -49,6 +51,7 @@ export type Transaction = {
 export type TransactionInput = {
   transactionDate: string;
   description: string;
+  subDescription?: string | null;
   amount: number;
   transactionType: string;
   financialAccountId: string;
@@ -124,6 +127,7 @@ export type StatementImportCandidateChange = {
   selected: boolean;
   transactionDate: string | null;
   description: string;
+  subDescription: string | null;
   amount: number | null;
   transactionType: string;
   categoryId: string | null;

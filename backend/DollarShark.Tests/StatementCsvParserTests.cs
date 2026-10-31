@@ -30,6 +30,35 @@ public sealed class StatementCsvParserTests
     }
 
     [Fact]
+    public async Task ParsesScotiabankSubDescriptionAndTreatsEmptyValuesAsNull()
+    {
+        const string csv = "Transaction Date,Description,Sub-description,Amount\n" +
+            "2026-01-05,Interac e-Transfer,Jane Sample,-25.00\n" +
+            "2026-01-06,Coffee,, -4.50\n";
+
+        var preview = await Parse(Encoding.UTF8.GetBytes(csv));
+
+        Assert.Equal(2, preview.ValidRows);
+        Assert.Equal("Jane Sample", preview.Candidates[0].SubDescription);
+        Assert.Null(preview.Candidates[1].SubDescription);
+    }
+
+    [Fact]
+    public async Task ParsesAmexStyleCsvAndPreservesExistingCandidateFieldsWithoutSubDescription()
+    {
+        const string csv = "Date,Description,Card Member,Account #,Amount\n" +
+            "9/20/2026,UBER EATS,SAMPLE MEMBER,0000,22.07\n";
+
+        var candidate = Assert.Single((await Parse(Encoding.UTF8.GetBytes(csv))).Candidates);
+
+        Assert.Equal(new DateOnly(2026, 9, 20), candidate.TransactionDate);
+        Assert.Equal("UBER EATS", candidate.Description);
+        Assert.Equal(22.07m, candidate.Amount);
+        Assert.Equal(22.07m, candidate.SourceAmount);
+        Assert.Null(candidate.SubDescription);
+    }
+
+    [Fact]
     public async Task MapsSeparateDebitAndCreditColumnsToExpenseAndIncomeSigns()
     {
         const string csv = "Date,Description,Debit,Credit\n2026-01-05,Groceries,25.70,\n2026-01-06,Paycheck,,1200.00\n";

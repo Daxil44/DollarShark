@@ -10,11 +10,13 @@ public sealed record TransactionRequest(
     string? TransactionType,
     Guid FinancialAccountId,
     Guid? CategoryId,
-    string? ExternalReference = null);
+    string? ExternalReference = null,
+    string? SubDescription = null);
 
 public sealed record TransactionDto(
     Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string TransactionType,
-    string Currency, Guid FinancialAccountId, string AccountName, Guid? CategoryId, string? CategoryName, DateTime CreatedAtUtc);
+    string Currency, Guid FinancialAccountId, string AccountName, Guid? CategoryId, string? CategoryName, DateTime CreatedAtUtc,
+    string? SubDescription = null);
 
 public sealed record TransactionPage(
     IReadOnlyList<TransactionDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
@@ -242,6 +244,7 @@ public sealed class TransactionService(ITransactionRepository repository) : ITra
             CategoryId = request.CategoryId,
             Currency = validation.Currency!,
             ExternalReference = validation.ExternalReference,
+            SubDescription = validation.SubDescription,
             DuplicateWarningOverridden = duplicateWarningOverridden
         };
         await repository.AddAsync(transaction, cancellationToken);
@@ -265,6 +268,7 @@ public sealed class TransactionService(ITransactionRepository repository) : ITra
         transaction.CategoryId = request.CategoryId;
         transaction.Currency = validation.Currency!;
         transaction.ExternalReference = validation.ExternalReference ?? transaction.ExternalReference;
+        if (request.SubDescription is not null) transaction.SubDescription = validation.SubDescription;
         await repository.SaveChangesAsync(cancellationToken);
         var updated = await repository.GetAsync(id, cancellationToken) ?? throw new InvalidOperationException("Saved transaction could not be reloaded.");
         return UseCaseResult<TransactionDto>.Ok(updated);
@@ -280,17 +284,20 @@ public sealed class TransactionService(ITransactionRepository repository) : ITra
         return UseCaseResult<bool>.NoContent(true);
     }
 
-    private async Task<(string? Description, TransactionType? Type, string? Currency, string? ExternalReference,
+    private async Task<(string? Description, string? SubDescription, TransactionType? Type, string? Currency, string? ExternalReference,
         IReadOnlyDictionary<string, string[]>? Errors)> ValidateAsync(TransactionRequest request, CancellationToken cancellationToken)
     {
         var errors = new Dictionary<string, string[]>();
         var description = request.Description?.Trim();
+        var subDescription = string.IsNullOrWhiteSpace(request.SubDescription) ? null : request.SubDescription.Trim();
         var type = ParseType(request.TransactionType);
         if (request.TransactionDate == DateOnly.MinValue || request.TransactionDate.Year < 1900 ||
             request.TransactionDate > DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)))
             errors["transactionDate"] = ["Enter a valid transaction date no earlier than 1900 and no later than tomorrow."];
         if (string.IsNullOrWhiteSpace(description) || description.Length > 300)
             errors["description"] = ["Description is required and must be at most 300 characters."];
+        if (subDescription?.Length > 300)
+            errors["subDescription"] = ["Sub-description must be at most 300 characters."];
         var externalReference = string.IsNullOrWhiteSpace(request.ExternalReference) ? null : request.ExternalReference.Trim().ToUpperInvariant();
         if (externalReference?.Length > 255 || externalReference?.Any(char.IsControl) == true)
             errors["externalReference"] = ["External reference must be at most 255 characters and contain no control characters."];
@@ -311,8 +318,8 @@ public sealed class TransactionService(ITransactionRepository repository) : ITra
             errors["categoryId"] = ["Category was not found."];
         var currency = request.FinancialAccountId == Guid.Empty ? null :
             await repository.GetAccountCurrencyAsync(request.FinancialAccountId, cancellationToken);
-        if (errors.Count > 0) return (description, type, null, externalReference, errors);
-        return (description, type, currency, externalReference, null);
+        if (errors.Count > 0) return (description, subDescription, type, null, externalReference, errors);
+        return (description, subDescription, type, currency, externalReference, null);
     }
 
     private static TransactionType? ParseType(string? value) =>

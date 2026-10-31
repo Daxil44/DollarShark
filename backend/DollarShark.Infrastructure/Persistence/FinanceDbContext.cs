@@ -44,6 +44,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         var transaction = modelBuilder.Entity<Transaction>();
         transaction.HasKey(x => x.Id);
         transaction.Property(x => x.Description).HasMaxLength(300).IsRequired();
+        transaction.Property(x => x.SubDescription).HasMaxLength(300);
         transaction.Property(x => x.ExternalReference).HasMaxLength(255);
         transaction.Property(x => x.DuplicateWarningOverridden).HasDefaultValue(false);
         transaction.Property(x => x.Currency).HasMaxLength(3).IsRequired();

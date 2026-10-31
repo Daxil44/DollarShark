@@ -5,7 +5,8 @@ namespace DollarShark.Application.Accounts;
 
 public sealed record AccountRequest(string? Name, string? Institution, string? AccountType, string? Currency, string? LastFourDigits);
 public sealed record AccountStatusRequest(bool IsActive);
-public sealed record AccountDto(Guid Id, string Name, string Institution, string AccountType, string Currency, string? LastFourDigits, bool IsActive, DateTime CreatedAtUtc);
+public sealed record AccountDto(Guid Id, string Name, string Institution, string AccountType, string Classification,
+    string Currency, string? LastFourDigits, bool IsActive, DateTime CreatedAtUtc);
 
 public interface IAccountRepository
 {
@@ -27,7 +28,7 @@ public interface IAccountService
 
 public sealed class AccountService(IAccountRepository repository) : IAccountService
 {
-    private static readonly string[] AccountTypes = ["Chequing", "Savings", "Credit Card"];
+    private static readonly string[] AccountTypes = ["Chequing", "Savings", "Credit Card", "Investment"];
 
     public async Task<UseCaseResult<IReadOnlyList<AccountDto>>> ListAsync(bool includeInactive, CancellationToken cancellationToken) =>
         UseCaseResult<IReadOnlyList<AccountDto>>.Ok(await repository.ListAsync(includeInactive, cancellationToken));
@@ -91,14 +92,15 @@ public sealed class AccountService(IAccountRepository repository) : IAccountServ
 
         if (string.IsNullOrWhiteSpace(name) || name.Length > 120) errors["name"] = ["Name is required and must be at most 120 characters."];
         if (string.IsNullOrWhiteSpace(institution) || institution.Length > 120) errors["institution"] = ["Institution is required and must be at most 120 characters."];
-        if (accountType is null) errors["accountType"] = ["Account type must be Chequing, Savings, or Credit Card."];
+        if (accountType is null) errors["accountType"] = ["Account type must be Chequing, Savings, Credit Card, or Investment."];
         if (currency is null || currency.Length != 3 || currency.Any(c => !char.IsAsciiLetter(c))) errors["currency"] = ["Currency must be a three-letter code, such as CAD."];
         if (lastFour is not null && (lastFour.Length != 4 || lastFour.Any(c => !char.IsAsciiDigit(c)))) errors["lastFourDigits"] = ["Last four digits must contain exactly four numbers."];
         return (name, institution, accountType, currency, lastFour, errors.Count == 0 ? null : errors);
     }
 
     private static AccountDto ToDto(FinancialAccount account) =>
-        new(account.Id, account.Name, account.Institution, account.AccountType, account.Currency, account.LastFourDigits, account.IsActive, account.CreatedAtUtc);
+        new(account.Id, account.Name, account.Institution, account.AccountType, account.Classification.ToString(),
+            account.Currency, account.LastFourDigits, account.IsActive, account.CreatedAtUtc);
 
     private static IReadOnlyDictionary<string, string[]> Errors((string Key, string Message) error) =>
         new Dictionary<string, string[]> { [error.Key] = [error.Message] };

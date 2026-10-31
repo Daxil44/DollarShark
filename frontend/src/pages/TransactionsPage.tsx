@@ -57,7 +57,12 @@ export default function TransactionsPage() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ ...emptyForm(), financialAccountId: accounts[0]?.id ?? '' });
+    const defaultAccount = accounts[0];
+    setForm({
+      ...emptyForm(),
+      financialAccountId: defaultAccount?.id ?? '',
+      transactionType: defaultAccount?.accountType === 'Investment' ? 'Transfer' : 'Expense',
+    });
     setError('');
     setShowForm(true);
   }
@@ -169,7 +174,7 @@ export default function TransactionsPage() {
           </tr></thead>
           <tbody>{transactions.map(transaction => <tr key={transaction.id}>
             <td className="text-nowrap">{transaction.transactionDate}</td>
-            <td><strong>{transaction.description}</strong></td>
+            <td><strong>{transaction.description}</strong>{transaction.subDescription && <div className="small text-secondary">{transaction.subDescription}</div>}</td>
             <td>{transaction.accountName}</td><td>{transaction.categoryName ?? 'Uncategorized'}</td>
             <td className={transaction.amount < 0 ? 'text-danger text-nowrap' : 'text-success text-nowrap'}>{formatAmount(transaction)}</td>
             <td><Badge bg={transaction.transactionType === 'Expense' ? 'secondary' : 'success'}>{transaction.transactionType}</Badge></td>
@@ -190,7 +195,12 @@ export default function TransactionsPage() {
             <Form.Group className="col-sm-6 mb-3"><Form.Label>Type</Form.Label><Form.Select value={form.transactionType} onChange={event => setForm({ ...form, transactionType: event.target.value })}><option>Expense</option><option>Income</option><option>Refund</option><option>Transfer</option></Form.Select></Form.Group></div>
           <Form.Group className="mb-3"><Form.Label>Description</Form.Label><Form.Control required maxLength={300} value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></Form.Group>
           <Form.Group className="mb-3"><Form.Label>Amount</Form.Label><Form.Control required type="number" step="0.0001" value={form.amount} onChange={event => setForm({ ...form, amount: event.target.value })} placeholder={form.transactionType === 'Expense' ? '-24.99' : '24.99'} /><Form.Text>Expenses are negative; income and refunds are positive. Transfers may use either sign.</Form.Text></Form.Group>
-          <Form.Group className="mb-3"><Form.Label>Account</Form.Label><Form.Select required value={form.financialAccountId} onChange={event => setForm({ ...form, financialAccountId: event.target.value })}><option value="">Choose an account</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.currency}</option>)}</Form.Select></Form.Group>
+          <Form.Group className="mb-3"><Form.Label>Account</Form.Label><Form.Select required value={form.financialAccountId} onChange={event => {
+            const account = accounts.find(candidate => candidate.id === event.target.value);
+            setForm({ ...form, financialAccountId: event.target.value, ...(account?.accountType === 'Investment' ? { transactionType: 'Transfer' } : {}) });
+          }}><option value="">Choose an account</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.currency}</option>)}</Form.Select>
+            {accounts.find(account => account.id === form.financialAccountId)?.accountType === 'Investment' && <Form.Text>Investment contributions and withdrawals should be classified as transfers so they stay out of income and expense totals.</Form.Text>}
+          </Form.Group>
           <Form.Group><Form.Label>Category (optional)</Form.Label><Form.Select value={form.categoryId} onChange={event => setForm({ ...form, categoryId: event.target.value })}><option value="">Uncategorized</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</Form.Select></Form.Group>
         </Modal.Body>
         <Modal.Footer><Button variant="outline-secondary" onClick={() => setShowForm(false)}>Cancel</Button><Button variant="dark" type="submit" disabled={saving || accounts.length === 0}>{saving ? 'Saving…' : 'Save transaction'}</Button></Modal.Footer>

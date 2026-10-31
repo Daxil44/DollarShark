@@ -4,6 +4,7 @@ import { api, apiErrorMessage } from '../api';
 import type { Account, AccountInput } from '../types';
 
 const blankForm = (): AccountInput => ({ name: '', institution: '', accountType: 'Chequing', currency: 'CAD', lastFourDigits: '' });
+const classificationFor = (accountType: string) => accountType === 'Credit Card' ? 'Liability' : 'Asset';
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -82,7 +83,7 @@ export default function AccountsPage() {
 
   return <>
     <div className="page-heading">
-      <div><div className="eyebrow">FINANCIAL OVERVIEW</div><h1>Accounts</h1><p className="text-secondary mb-0">Manage chequing, savings, and credit card accounts.</p></div>
+      <div><div className="eyebrow">FINANCIAL OVERVIEW</div><h1>Accounts</h1><p className="text-secondary mb-0">Manage chequing, savings, credit card, and investment accounts.</p></div>
       <Button variant="dark" onClick={openCreate}>＋ Add account</Button>
     </div>
     {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
@@ -97,7 +98,7 @@ export default function AccountsPage() {
           <thead><tr><th>Account</th><th>Type</th><th>Currency</th><th>Status</th><th className="text-end">Actions</th></tr></thead>
           <tbody>{accounts.map(account => <tr key={account.id}>
             <td><strong>{account.name}</strong><div className="small text-secondary">{account.institution}{account.lastFourDigits ? ' · •••• ' + account.lastFourDigits : ''}</div></td>
-            <td>{account.accountType}</td><td>{account.currency}</td>
+            <td><div>{account.accountType}</div><Badge bg={account.classification === 'Liability' ? 'warning' : 'success'} text={account.classification === 'Liability' ? 'dark' : undefined}>{account.classification}</Badge></td><td>{account.currency}</td>
             <td><Badge bg={account.isActive ? 'success' : 'secondary'}>{account.isActive ? 'Active' : 'Inactive'}</Badge></td>
             <td className="text-end text-nowrap"><Button size="sm" variant="outline-secondary" className="me-2" onClick={() => openEdit(account)}>Edit</Button><Button size="sm" variant={account.isActive ? 'outline-danger' : 'outline-success'} onClick={() => void toggleStatus(account)}>{account.isActive ? 'Deactivate' : 'Reactivate'}</Button></td>
           </tr>)}</tbody>
@@ -110,7 +111,7 @@ export default function AccountsPage() {
           {error && <Alert variant="danger">{error}</Alert>}
           <Form.Group className="mb-3"><Form.Label>Account name</Form.Label><Form.Control required maxLength={120} value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Everyday chequing" /></Form.Group>
           <Form.Group className="mb-3"><Form.Label>Institution</Form.Label><Form.Control required maxLength={120} value={form.institution} onChange={event => setForm({ ...form, institution: event.target.value })} placeholder="Bank or credit union" /></Form.Group>
-          <Form.Group className="mb-3"><Form.Label>Account type</Form.Label><Form.Select value={form.accountType} onChange={event => setForm({ ...form, accountType: event.target.value })}><option>Chequing</option><option>Savings</option><option>Credit Card</option></Form.Select></Form.Group>
+          <Form.Group className="mb-3"><Form.Label>Account type</Form.Label><Form.Select value={form.accountType} onChange={event => setForm({ ...form, accountType: event.target.value })}><option>Chequing</option><option>Savings</option><option>Credit Card</option><option>Investment</option></Form.Select><Form.Text>This account is classified as a {classificationFor(form.accountType).toLowerCase()}.</Form.Text></Form.Group>
           <div className="row"><Form.Group className="col-sm-6 mb-3"><Form.Label>Currency</Form.Label><Form.Control required maxLength={3} minLength={3} value={form.currency} onChange={event => setForm({ ...form, currency: event.target.value.toUpperCase() })} /></Form.Group><Form.Group className="col-sm-6 mb-3"><Form.Label>Last four digits (optional)</Form.Label><Form.Control inputMode="numeric" maxLength={4} value={form.lastFourDigits} onChange={event => setForm({ ...form, lastFourDigits: event.target.value })} /></Form.Group></div>
           <div className="small text-secondary">Never enter a full card number, CVV, or banking password.</div>
         </Modal.Body>

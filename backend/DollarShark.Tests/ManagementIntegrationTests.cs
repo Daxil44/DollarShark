@@ -2,6 +2,7 @@ using DollarShark.Application.Accounts;
 using DollarShark.Application.Categories;
 using DollarShark.Application.Common;
 using DollarShark.Application.Transactions;
+using DollarShark.Domain;
 using DollarShark.Infrastructure.Identity;
 using DollarShark.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
@@ -19,7 +20,7 @@ public sealed class ManagementIntegrationTests
         await using var db = await TestDatabase.CreateAsync();
         var service = new AccountService(new FinanceRepository(db.Context, new TestCurrentUser()));
 
-        var invalid = await service.CreateAsync(new AccountRequest("", "", "Investment", "CAD", "123"), Ct);
+        var invalid = await service.CreateAsync(new AccountRequest("", "", "Crypto", "CAD", "123"), Ct);
         Assert.Equal(400, invalid.StatusCode);
         Assert.NotNull(invalid.Errors);
 
@@ -27,11 +28,33 @@ public sealed class ManagementIntegrationTests
         Assert.Equal(201, created.StatusCode);
         Assert.NotNull(created.Value);
         Assert.Equal("CAD", created.Value.Currency);
+        Assert.Equal("Asset", created.Value.Classification);
+
+        var savings = await service.CreateAsync(new AccountRequest("Reserve", "North Bank", "Savings", "CAD", null), Ct);
+        var creditCard = await service.CreateAsync(new AccountRequest("Rewards", "Card Co", "Credit Card", "CAD", null), Ct);
+        var investment = await service.CreateAsync(new AccountRequest("Portfolio", "Wealthwise", "Investment", "CAD", null), Ct);
+        Assert.Equal(201, savings.StatusCode);
+        Assert.Equal("Asset", savings.Value!.Classification);
+        Assert.Equal(201, creditCard.StatusCode);
+        Assert.Equal("Liability", creditCard.Value!.Classification);
+        Assert.Equal(201, investment.StatusCode);
+        Assert.Equal("Asset", investment.Value!.Classification);
+
+        var investmentAccount = investment.Value!;
+        var editedInvestment = await service.UpdateAsync(investmentAccount.Id,
+            new AccountRequest("Long term portfolio", "Wealthwise", "Investment", "CAD", null), Ct);
+        Assert.Equal(200, editedInvestment.StatusCode);
+        Assert.Equal("Long term portfolio", editedInvestment.Value!.Name);
+        Assert.Equal("Investment", editedInvestment.Value.AccountType);
+        Assert.Equal("Asset", editedInvestment.Value.Classification);
 
         var deactivated = await service.SetStatusAsync(created.Value.Id, new AccountStatusRequest(false), Ct);
         Assert.False(deactivated.Value!.IsActive);
-        Assert.Empty((await service.ListAsync(false, Ct)).Value!);
-        Assert.Single((await service.ListAsync(true, Ct)).Value!);
+        var activeAccounts = (await service.ListAsync(false, Ct)).Value!;
+        Assert.Equal(3, activeAccounts.Count);
+        Assert.Equal("Liability", Assert.Single(activeAccounts, account => account.AccountType == "Credit Card").Classification);
+        Assert.Equal("Asset", Assert.Single(activeAccounts, account => account.AccountType == "Investment").Classification);
+        Assert.Equal(4, (await service.ListAsync(true, Ct)).Value!.Count);
     }
 
     [Fact]
@@ -59,6 +82,7 @@ public sealed class ManagementIntegrationTests
         var transactions = new TransactionService(repo);
 
         var account = (await accounts.CreateAsync(new AccountRequest("Daily", "North Bank", "Chequing", "CAD", null), Ct)).Value!;
+        var card = (await accounts.CreateAsync(new AccountRequest("Rewards", "Card Co", "Credit Card", "CAD", null), Ct)).Value!;
         var category = (await categories.CreateAsync(new CategoryRequest("Pets", null), Ct)).Value!;
         var missingAccount = await transactions.CreateAsync(
             new TransactionRequest(new DateOnly(2026, 2, 2), "Food", -12m, "Expense", Guid.NewGuid(), category.Id), Ct);
@@ -74,9 +98,37 @@ public sealed class ManagementIntegrationTests
         Assert.Equal("CAD", created.Value!.Currency);
         Assert.Equal(category.Id, created.Value.CategoryId);
 
+        var cardPurchase = await transactions.CreateAsync(
+            new TransactionRequest(new DateOnly(2026, 2, 3), "Card purchase", -42.50m, "Expense", card.Id, null), Ct);
+        Assert.Equal(201, cardPurchase.StatusCode);
+        Assert.Equal(-42.50m, cardPurchase.Value!.Amount);
+        Assert.Equal(42.50m, new Transaction { Amount = cardPurchase.Value.Amount, TransactionType = TransactionType.Expense }
+            .GetAccountBalanceEffect(AccountClassification.Liability));
+
         var missingCategory = await transactions.CreateAsync(
             new TransactionRequest(new DateOnly(2026, 2, 2), "Food", -12m, "Expense", account.Id, Guid.NewGuid()), Ct);
         Assert.Equal(400, missingCategory.StatusCode);
+    }
+
+    [Fact]
+    public void TransactionBalanceEffectsKeepReportingAmountsAndAccountSideBalancesSeparate()
+    {
+        var salary = new Transaction { Amount = 2500m, TransactionType = TransactionType.Income };
+        var purchase = new Transaction { Amount = -42.50m, TransactionType = TransactionType.Expense };
+        var refund = new Transaction { Amount = 12m, TransactionType = TransactionType.Refund };
+        var transferOut = new Transaction { Amount = -100m, TransactionType = TransactionType.Transfer };
+        var transferIn = new Transaction { Amount = 100m, TransactionType = TransactionType.Transfer };
+
+        Assert.Equal(2500m, salary.GetAccountBalanceEffect(AccountClassification.Asset));
+        Assert.Equal(-2500m, salary.GetAccountBalanceEffect(AccountClassification.Liability));
+        Assert.Equal(-42.50m, purchase.GetAccountBalanceEffect(AccountClassification.Asset));
+        Assert.Equal(42.50m, purchase.GetAccountBalanceEffect(AccountClassification.Liability));
+        Assert.Equal(12m, refund.GetAccountBalanceEffect(AccountClassification.Asset));
+        Assert.Equal(-12m, refund.GetAccountBalanceEffect(AccountClassification.Liability));
+        Assert.Equal(-100m, transferOut.GetAccountBalanceEffect(AccountClassification.Asset));
+        Assert.Equal(100m, transferIn.GetAccountBalanceEffect(AccountClassification.Asset));
+        Assert.Equal(-100m, transferOut.GetAccountBalanceEffect(AccountClassification.Liability));
+        Assert.Equal(-42.50m, purchase.Amount);
     }
 
     [Fact]
@@ -88,7 +140,8 @@ public sealed class ManagementIntegrationTests
         var transactions = new TransactionService(repo);
         var account = (await accounts.CreateAsync(new AccountRequest("Daily", "North Bank", "Chequing", "CAD", null), Ct)).Value!;
 
-        await transactions.CreateAsync(new TransactionRequest(new DateOnly(2026, 1, 2), "Coffee beans", -10m, "Expense", account.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(new DateOnly(2026, 1, 2), "Coffee beans", -10m, "Expense", account.Id, null,
+            SubDescription: "Dark roast 1kg"), Ct);
         await transactions.CreateAsync(new TransactionRequest(new DateOnly(2026, 1, 3), "Coffee shop", -15m, "Expense", account.Id, null), Ct);
         await transactions.CreateAsync(new TransactionRequest(new DateOnly(2025, 1, 3), "Bus pass", -8m, "Expense", account.Id, null), Ct);
 
@@ -112,6 +165,11 @@ public sealed class ManagementIntegrationTests
             From = new DateOnly(2026, 1, 2), To = new DateOnly(2026, 1, 2)
         }, Ct);
         Assert.Equal("Coffee beans", Assert.Single(exactDate.Value!.Items).Description);
+
+        var subDescriptionSearch = await transactions.ListAsync(new TransactionListQuery { Search = "roast" }, Ct);
+        var foundBySubDescription = Assert.Single(subDescriptionSearch.Value!.Items);
+        Assert.Equal("Coffee beans", foundBySubDescription.Description);
+        Assert.Equal("Dark roast 1kg", foundBySubDescription.SubDescription);
     }
 
     [Fact]
