@@ -132,6 +132,88 @@ public sealed class ManagementIntegrationTests
     }
 
     [Fact]
+    public async Task OpeningBalancesValidateAndCalculateAfterTheOpeningDateForEveryAccountClassification()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        var repo = new FinanceRepository(db.Context, new TestCurrentUser());
+        var accounts = new AccountService(repo);
+        var transactions = new TransactionService(repo);
+        var openingDate = new DateOnly(2026, 1, 10);
+
+        var unconfigured = await accounts.CreateAsync(new AccountRequest("Unknown", "North Bank", "Chequing", "CAD", null), Ct);
+        Assert.Null(unconfigured.Value!.OpeningBalance);
+        Assert.Null(unconfigured.Value.CalculatedBalance);
+
+        var invalidPair = await accounts.CreateAsync(
+            new AccountRequest("Incomplete", "North Bank", "Chequing", "CAD", null, 100m), Ct);
+        Assert.Equal(400, invalidPair.StatusCode);
+        var invalidPastDate = await accounts.CreateAsync(
+            new AccountRequest("Too old", "North Bank", "Savings", "CAD", null, 0m, new DateOnly(1899, 12, 31)), Ct);
+        Assert.Equal(400, invalidPastDate.StatusCode);
+        var invalidFutureDate = await accounts.CreateAsync(
+            new AccountRequest("Future", "North Bank", "Savings", "CAD", null, 0m, DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1)), Ct);
+        Assert.Equal(400, invalidFutureDate.StatusCode);
+
+        var chequing = (await accounts.CreateAsync(new AccountRequest("Daily", "North Bank", "Chequing", "CAD", null, 1000m, openingDate), Ct)).Value!;
+        var savings = (await accounts.CreateAsync(new AccountRequest("Reserve", "North Bank", "Savings", "CAD", null, 0m, openingDate), Ct)).Value!;
+        var card = (await accounts.CreateAsync(new AccountRequest("Rewards", "Card Co", "Credit Card", "CAD", null, 500m, openingDate), Ct)).Value!;
+        var investment = (await accounts.CreateAsync(new AccountRequest("Portfolio", "Broker", "Investment", "CAD", null, -25m, openingDate), Ct)).Value!;
+
+        Assert.Equal(0m, savings.CalculatedBalance);
+        Assert.Equal(-25m, investment.CalculatedBalance);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(-1), "Earlier salary", 500m, "Income", chequing.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate, "Opening day salary", 100m, "Income", chequing.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(1), "Purchase", -20m, "Expense", chequing.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(1), "Salary", 200m, "Income", chequing.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(1), "Transfer out", -30m, "Transfer", chequing.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(1), "Savings withdrawal", -5m, "Expense", savings.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(1), "Card purchase", -40m, "Expense", card.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(1), "Card payment", -100m, "Transfer", card.Id, null), Ct);
+        await transactions.CreateAsync(new TransactionRequest(openingDate.AddDays(1), "Contribution", 50m, "Transfer", investment.Id, null), Ct);
+
+        var listedAccounts = (await accounts.ListAsync(false, Ct)).Value!;
+        Assert.Equal(1150m, Assert.Single(listedAccounts, account => account.Id == chequing.Id).CalculatedBalance);
+        Assert.Equal(-5m, Assert.Single(listedAccounts, account => account.Id == savings.Id).CalculatedBalance);
+        Assert.Equal(440m, Assert.Single(listedAccounts, account => account.Id == card.Id).CalculatedBalance);
+        Assert.Equal(25m, Assert.Single(listedAccounts, account => account.Id == investment.Id).CalculatedBalance);
+
+        var updated = await accounts.UpdateAsync(chequing.Id,
+            new AccountRequest("Daily", "North Bank", "Chequing", "CAD", null, 1200m, openingDate.AddDays(1)), Ct);
+        Assert.Equal(200, updated.StatusCode);
+        Assert.Equal(1200m, updated.Value!.OpeningBalance);
+        Assert.Equal(openingDate.AddDays(1), updated.Value.OpeningBalanceDate);
+        Assert.Equal(1200m, updated.Value.CalculatedBalance);
+
+        var negativeOpening = await accounts.UpdateAsync(investment.Id,
+            new AccountRequest("Portfolio", "Broker", "Investment", "CAD", null, -50m, openingDate), Ct);
+        Assert.Equal(-50m, negativeOpening.Value!.OpeningBalance);
+        Assert.Equal(0m, negativeOpening.Value.CalculatedBalance);
+    }
+
+    [Fact]
+    public async Task OpeningBalanceUpdatesAndReadsAreScopedToTheAccountOwner()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        var ownerService = new AccountService(new FinanceRepository(db.Context, new TestCurrentUser()));
+        var account = (await ownerService.CreateAsync(
+            new AccountRequest("Daily", "North Bank", "Chequing", "CAD", null, 100m, new DateOnly(2026, 1, 1)), Ct)).Value!;
+        var outsider = new ApplicationUser
+        {
+            Id = "another-test-user", UserName = "another-test-user", NormalizedUserName = "ANOTHER-TEST-USER",
+            Email = "another-test-user@example.test", NormalizedEmail = "ANOTHER-TEST-USER@EXAMPLE.TEST", EmailConfirmed = true
+        };
+        db.Context.Users.Add(outsider);
+        await db.Context.SaveChangesAsync();
+
+        var otherUserService = new AccountService(new FinanceRepository(db.Context, new TestCurrentUser(outsider.Id)));
+        Assert.Equal(404, (await otherUserService.GetAsync(account.Id, Ct)).StatusCode);
+        Assert.Equal(404, (await otherUserService.UpdateAsync(account.Id,
+            new AccountRequest("Hijacked", "North Bank", "Chequing", "CAD", null, 999m, new DateOnly(2026, 1, 1)), Ct)).StatusCode);
+        Assert.Empty((await otherUserService.ListAsync(true, Ct)).Value!);
+        Assert.Equal(100m, (await ownerService.GetAsync(account.Id, Ct)).Value!.OpeningBalance);
+    }
+
+    [Fact]
     public async Task TransactionFiltersSearchSortAndPaginateInRelationalStore()
     {
         await using var db = await TestDatabase.CreateAsync();
@@ -247,10 +329,10 @@ public sealed class ManagementIntegrationTests
         }
     }
 
-    private sealed class TestCurrentUser : ICurrentUserContext
+    private sealed class TestCurrentUser(string? userId = null) : ICurrentUserContext
     {
         public const string Id = "integration-test-user";
-        public string UserId => Id;
+        public string UserId => userId ?? Id;
     }
 }
 

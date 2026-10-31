@@ -23,7 +23,9 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         account.Property(x => x.Institution).HasMaxLength(120).IsRequired();
         account.Property(x => x.AccountType).HasMaxLength(40).IsRequired();
         account.Property(x => x.Currency).HasMaxLength(3).IsRequired();
+        account.Property(x => x.OpeningBalance).HasPrecision(19, 4);
         account.Property(x => x.LastFourDigits).HasMaxLength(4);
+        account.ToTable(table => table.HasCheckConstraint("CK_FinancialAccounts_OpeningBalance", "([OpeningBalance] IS NULL AND [OpeningBalanceDate] IS NULL) OR ([OpeningBalance] IS NOT NULL AND [OpeningBalanceDate] IS NOT NULL)"));
         account.HasIndex(x => new { x.Institution, x.Name });
         account.Property(x => x.UserId).HasMaxLength(450);
         account.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
