@@ -21,18 +21,24 @@ public sealed record DashboardCurrencySummary(
     decimal PreviousIncome,
     decimal PreviousExpenses,
     decimal PreviousNetCashFlow);
+public sealed record DashboardCategoryExpense(string Currency, string CategoryName, decimal Amount);
+public sealed record DashboardMonthlyTotals(string Currency, string Month, decimal Income, decimal Expenses);
 public sealed record DashboardOverview(
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
     DateOnly PreviousPeriodStart,
     DateOnly PreviousPeriodEnd,
     IReadOnlyList<DashboardCurrencySummary> Currencies,
-    IReadOnlyList<DashboardRecentTransaction> RecentTransactions);
+    IReadOnlyList<DashboardRecentTransaction> RecentTransactions,
+    IReadOnlyList<DashboardCategoryExpense> CategoryExpenses,
+    IReadOnlyList<DashboardMonthlyTotals> MonthlyTotals);
 
 public interface IDashboardRepository
 {
     Task<IReadOnlyList<DashboardTotals>> GetTotalsAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken);
     Task<IReadOnlyList<DashboardRecentTransaction>> GetRecentTransactionsAsync(DateOnly from, DateOnly to, int limit, CancellationToken cancellationToken);
+    Task<IReadOnlyList<DashboardCategoryExpense>> GetCategoryExpensesAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken);
+    Task<IReadOnlyList<DashboardMonthlyTotals>> GetMonthlyTotalsAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken);
 }
 
 public interface IDashboardService
@@ -67,6 +73,8 @@ public sealed class DashboardService(IDashboardRepository repository) : IDashboa
         var currentTotals = await repository.GetTotalsAsync(periodStart, periodEnd, cancellationToken);
         var previousTotals = await repository.GetTotalsAsync(previousStart, previousEnd, cancellationToken);
         var recent = await repository.GetRecentTransactionsAsync(periodStart, periodEnd, query.RecentLimit, cancellationToken);
+        var categoryExpenses = await repository.GetCategoryExpensesAsync(periodStart, periodEnd, cancellationToken);
+        var monthlyTotals = await repository.GetMonthlyTotalsAsync(periodStart, periodEnd, cancellationToken);
         var currentByCurrency = currentTotals.ToDictionary(x => x.Currency, StringComparer.OrdinalIgnoreCase);
         var previousByCurrency = previousTotals.ToDictionary(x => x.Currency, StringComparer.OrdinalIgnoreCase);
         var currencies = currentByCurrency.Keys.Concat(previousByCurrency.Keys)
@@ -83,7 +91,7 @@ public sealed class DashboardService(IDashboardRepository repository) : IDashboa
             .ToArray();
 
         return UseCaseResult<DashboardOverview>.Ok(new DashboardOverview(
-            periodStart, periodEnd, previousStart, previousEnd, currencies, recent));
+            periodStart, periodEnd, previousStart, previousEnd, currencies, recent, categoryExpenses, monthlyTotals));
     }
 
     private static (DateOnly Start, DateOnly End) PreviousPeriod(DateOnly from, DateOnly to)

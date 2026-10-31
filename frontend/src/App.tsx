@@ -9,6 +9,7 @@ import CategoriesPage from './pages/CategoriesPage';
 import TransactionsPage from './pages/TransactionsPage';
 import StatementsPage from './pages/StatementsPage';
 import DashboardPage from './pages/DashboardPage';
+import DollarSharkLogo from './components/DollarSharkLogo';
 import './App.css';
 
 function ProtectedApp() {
@@ -19,7 +20,7 @@ function ProtectedApp() {
   const [signingOut, setSigningOut] = useState(false);
 
   if (checking) return <div className="auth-loading"><Spinner animation="border" role="status"><span className="visually-hidden">Checking session…</span></Spinner></div>;
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!user) return <Navigate to="/login" replace state={{ from: { pathname: location.pathname, search: location.search, hash: location.hash } }} />;
 
   async function signOut() {
     setError('');
@@ -36,10 +37,10 @@ function ProtectedApp() {
 
   return <div className="app-shell">
     <Navbar expand="lg" className="topbar"><Container>
-      <Navbar.Brand as={Link} to="/" className="brand"><span className="brand-mark">$</span> DollarShark</Navbar.Brand>
+      <Navbar.Brand as={Link} to="/dashboard" className="brand" aria-label="DollarShark home"><DollarSharkLogo /></Navbar.Brand>
       <Navbar.Toggle aria-controls="main-nav" />
       <Navbar.Collapse id="main-nav"><Nav className="me-auto">
-        <Nav.Link as={NavLink} to="/" end>Dashboard</Nav.Link>
+        <Nav.Link as={NavLink} to="/dashboard">Dashboard</Nav.Link>
         <Nav.Link as={NavLink} to="/accounts">Accounts</Nav.Link>
         <Nav.Link as={NavLink} to="/categories">Categories</Nav.Link>
         <Nav.Link as={NavLink} to="/transactions">Transactions</Nav.Link>
@@ -49,12 +50,13 @@ function ProtectedApp() {
     <main><Container className="main-content">
       {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
       <Routes>
-        <Route path="/" element={<DashboardPage />} />
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/transactions" element={<TransactionsPage />} />
         <Route path="/statements" element={<StatementsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
       <footer>DollarShark <span>·</span> Personal finance, made clearer.</footer>
     </Container></main>

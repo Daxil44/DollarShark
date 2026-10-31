@@ -10,6 +10,7 @@ using DollarShark.Application.Statements;
 using DollarShark.Infrastructure.Identity;
 using DollarShark.Infrastructure.Persistence;
 using DollarShark.Infrastructure.Statements;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -18,6 +19,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Data.Sqlite;
 
 namespace DollarShark.Tests;
@@ -672,10 +674,12 @@ public sealed class StatementIntegrationTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Development");
+            builder.ConfigureLogging(logging => logging.ClearProviders());
             builder.UseSetting("StatementStorage:RootPath", StorageRoot);
             builder.UseSetting("StatementStorage:MaxFileSizeBytes", maxFileSizeBytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.ConfigureServices(services =>
             {
+                services.AddDataProtection().UseEphemeralDataProtectionProvider();
                 services.RemoveAll<IDbContextOptionsConfiguration<FinanceDbContext>>();
                 services.RemoveAll<DbContextOptions<FinanceDbContext>>();
                 services.RemoveAll<FinanceDbContext>();
