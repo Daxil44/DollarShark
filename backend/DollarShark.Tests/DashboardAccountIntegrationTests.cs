@@ -126,6 +126,113 @@ public sealed class DashboardAccountIntegrationTests
         Assert.Equal(3, result.Value.RecentTransactions.Count);
     }
 
+    [Fact]
+    public async Task BalanceHistoryAppliesOpeningDateTransfersClassificationAndRequestedIntervals()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        var currentUser = new TestCurrentUser();
+        var finance = new FinanceRepository(db.Context, currentUser);
+        var accounts = new AccountService(finance);
+        var transactions = new TransactionService(finance);
+        var transfers = new TransferService(finance);
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser));
+        var openingDate = new DateOnly(2026, 1, 10);
+        var endDate = new DateOnly(2026, 1, 20);
+        var bank = (await accounts.CreateAsync(new AccountRequest("Daily", "Bank", "Chequing", "CAD", null, 1000m, openingDate), Ct)).Value!;
+        var card = (await accounts.CreateAsync(new AccountRequest("Card", "Card Co", "Credit Card", "CAD", null, 500m, openingDate), Ct)).Value!;
+        var usd = (await accounts.CreateAsync(new AccountRequest("USD", "Broker", "Investment", "USD", null, 50m, openingDate), Ct)).Value!;
+
+        async Task<TransactionDto> Add(Guid accountId, DateOnly date, string description, decimal amount, string type) =>
+            (await transactions.CreateAsync(new TransactionRequest(date, description, amount, type, accountId, null), Ct)).Value!;
+        await Add(bank.Id, openingDate.AddDays(-2), "Before opening", 100m, "Income");
+        await Add(bank.Id, openingDate, "On opening date", 100m, "Income");
+        await Add(bank.Id, new DateOnly(2026, 1, 12), "Salary", 200m, "Income");
+        await Add(bank.Id, new DateOnly(2026, 1, 14), "Purchase", -40m, "Expense");
+        var outgoing = await Add(bank.Id, new DateOnly(2026, 1, 15), "Card payment", -100m, "Transfer");
+        var incoming = await Add(card.Id, new DateOnly(2026, 1, 15), "Payment received", 100m, "Transfer");
+        await Add(card.Id, new DateOnly(2026, 1, 16), "Card purchase", -40m, "Expense");
+        await Add(card.Id, new DateOnly(2026, 1, 18), "Card refund", 10m, "Refund");
+        await Add(bank.Id, new DateOnly(2026, 1, 18), "Refund", 10m, "Refund");
+        await Add(usd.Id, new DateOnly(2026, 1, 18), "Other currency", 900m, "Income");
+        Assert.Equal(200, (await transfers.LinkAsync(new TransferLinkRequest(outgoing.Id, incoming.Id), Ct)).StatusCode);
+
+        var daily = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = bank.Id, From = openingDate, To = endDate, Interval = "Daily"
+        }, Ct)).Value!;
+        Assert.True(daily.IsAvailable);
+        Assert.Equal("CAD", daily.Currency);
+        Assert.Equal(11, daily.Points.Count);
+        Assert.Equal(1000m, daily.Points[0].Balance);
+        Assert.Equal(1200m, Assert.Single(daily.Points, point => point.Date == new DateOnly(2026, 1, 12)).Balance);
+        Assert.Equal(1060m, Assert.Single(daily.Points, point => point.Date == new DateOnly(2026, 1, 15)).Balance);
+        Assert.Equal(1070m, daily.Points[^1].Balance);
+
+        var weekly = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = bank.Id, From = openingDate, To = endDate, Interval = "Weekly"
+        }, Ct)).Value!;
+        Assert.Equal(3, weekly.Points.Count);
+        Assert.Equal(new DateOnly(2026, 1, 17), weekly.Points[1].Date);
+        Assert.Equal(1060m, weekly.Points[1].Balance);
+        var monthly = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = bank.Id, From = openingDate, To = endDate, Interval = "Monthly"
+        }, Ct)).Value!;
+        Assert.Equal(2, monthly.Points.Count);
+        Assert.Equal(1070m, monthly.Points[^1].Balance);
+
+        var cardHistory = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = card.Id, From = openingDate, To = endDate, Interval = "Daily"
+        }, Ct)).Value!;
+        Assert.Equal("Liability", cardHistory.Classification);
+        Assert.Equal(400m, Assert.Single(cardHistory.Points, point => point.Date == new DateOnly(2026, 1, 15)).Balance);
+        Assert.Equal(440m, Assert.Single(cardHistory.Points, point => point.Date == new DateOnly(2026, 1, 16)).Balance);
+        Assert.Equal(430m, cardHistory.Points[^1].Balance);
+    }
+
+    [Fact]
+    public async Task BalanceHistoryHandlesMissingOpeningEmptyRangesAndOwnership()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        var currentUser = new TestCurrentUser();
+        var accounts = new AccountService(new FinanceRepository(db.Context, currentUser));
+        var unconfigured = (await accounts.CreateAsync(new AccountRequest("Unknown", "Bank", "Savings", "CAD", null), Ct)).Value!;
+        var configuredEmpty = (await accounts.CreateAsync(new AccountRequest("Empty", "Bank", "Chequing", "CAD", null, 0m, new DateOnly(2026, 1, 10)), Ct)).Value!;
+        var foreign = new FinancialAccount
+        {
+            UserId = "other-dashboard-user", Name = "Private", Institution = "Bank", AccountType = "Chequing", Currency = "CAD"
+        };
+        db.Context.FinancialAccounts.Add(foreign);
+        await db.Context.SaveChangesAsync(Ct);
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser));
+
+        var missing = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = unconfigured.Id, From = new DateOnly(2026, 1, 1), To = new DateOnly(2026, 1, 5)
+        }, Ct)).Value!;
+        Assert.False(missing.IsAvailable);
+        Assert.Empty(missing.Points);
+        var beforeOpening = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = configuredEmpty.Id, From = new DateOnly(2026, 1, 1), To = new DateOnly(2026, 1, 5)
+        }, Ct)).Value!;
+        Assert.True(beforeOpening.IsAvailable);
+        Assert.Empty(beforeOpening.Points);
+        var empty = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = configuredEmpty.Id, From = new DateOnly(2026, 1, 10), To = new DateOnly(2026, 1, 12), Interval = "Daily"
+        }, Ct)).Value!;
+        Assert.Equal(3, empty.Points.Count);
+        Assert.All(empty.Points, point => Assert.Equal(0m, point.Balance));
+        Assert.Equal(404, (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery { AccountId = foreign.Id }, Ct)).StatusCode);
+        Assert.Equal(400, (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
+        {
+            AccountId = configuredEmpty.Id, From = new DateOnly(2026, 2, 1), To = new DateOnly(2026, 1, 1)
+        }, Ct)).StatusCode);
+    }
+
     private sealed class TestDatabase : IAsyncDisposable
     {
         private readonly SqliteConnection connection;

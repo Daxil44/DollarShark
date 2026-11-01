@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Alert, Badge, Button, Card, Form, Spinner, Table } from 'react-bootstrap';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Bar, BarChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer,
+  Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { api, apiErrorMessage } from '../api';
-import type { Account, Category, DashboardCurrencySummary, DashboardOverview, DashboardRecentTransaction, TransactionPage } from '../types';
+import type { Account, AccountBalanceHistory, Category, DashboardCurrencySummary, DashboardOverview, DashboardRecentTransaction, TransactionPage } from '../types';
 
 type Period = { from: string; to: string };
 type Preset = 'thisMonth' | 'lastMonth' | 'last3Months' | 'thisYear' | 'allTime' | 'custom';
@@ -98,6 +98,10 @@ export default function DashboardPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [accountTransactions, setAccountTransactions] = useState<TransactionPage | null>(null);
+  const [balanceHistory, setBalanceHistory] = useState<AccountBalanceHistory | null>(null);
+  const [balanceInterval, setBalanceInterval] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceError, setBalanceError] = useState('');
   const [transactionsLoading, setTransactionsLoading] = useState(false);
   const [transactionError, setTransactionError] = useState('');
   const [transactionFilters, setTransactionFilters] = useState({ search: '', from: '', to: '', transactionType: '', categoryId: '', page: 1 });
@@ -150,8 +154,22 @@ export default function DashboardPage() {
     return () => { cancelled = true; };
   }, [selectedAccountId, period.from, period.to, transactionFilters]);
 
+  useEffect(() => {
+    if (!selectedAccountId) { setBalanceHistory(null); setBalanceError(''); return; }
+    let cancelled = false;
+    setBalanceLoading(true); setBalanceError('');
+    void api.get<AccountBalanceHistory>(`/api/dashboard/accounts/${selectedAccountId}/balance-history`, {
+      params: { from: period.from, to: period.to, interval: balanceInterval },
+    }).then(response => { if (!cancelled) setBalanceHistory(response.data); })
+      .catch(loadError => { if (!cancelled) { setBalanceHistory(null); setBalanceError(apiErrorMessage(loadError)); } })
+      .finally(() => { if (!cancelled) setBalanceLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedAccountId, period.from, period.to, balanceInterval]);
+
   function choosePreset(value: Preset) {
     setPreset(value);
+    if (value === 'allTime' || value === 'thisYear') setBalanceInterval('Monthly');
+    else if (value !== 'custom') setBalanceInterval('Daily');
     if (value !== 'custom') {
       const next = periodFor(value);
       setDraftPeriod(next);
@@ -220,6 +238,16 @@ export default function DashboardPage() {
         ].map(card => <div className="col-12 col-sm-6 col-xl" key={card.label}><Card className="stat-card h-100"><Card.Body><div className="stat-label">{card.label}</div><div className={`stat-value dashboard-stat-value ${card.tone}`}>{card.value}</div><div className="stat-note">{card.note}</div></Card.Body></Card></div>)}</div>
       </section> : overview.currencies.map(summary => <SummaryCards key={summary.currency} summary={summary} previousPeriod={previousRange} />)}
       {!overview.currencies.length && <div className="row g-3 mb-4"><div className="col-12 col-sm-6 col-xl-3"><Card className="stat-card h-100"><Card.Body><div className="stat-label">TOTAL BALANCE</div><div className="stat-value dashboard-stat-value text-secondary">Not tracked</div><div className="stat-note">Account balances are not available yet.</div></Card.Body></Card></div></div>}
+
+      {selectedAccount && <div className="content-card p-3 p-md-4 mb-4">
+        <div className="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3"><div><h2 className="section-title">{isCreditCard ? 'Outstanding liability history' : isInvestment ? 'Recorded account balance history' : 'Cash balance history'}</h2><p className="small text-secondary mb-0">Calculated from the opening balance and account-side transactions in {selectedAccount.currency}.</p></div><Form.Group className="d-flex align-items-center gap-2"><Form.Label htmlFor="balance-history-interval" className="mb-0 small text-secondary">View</Form.Label><Form.Select id="balance-history-interval" size="sm" value={balanceInterval} onChange={event => setBalanceInterval(event.target.value as 'Daily' | 'Weekly' | 'Monthly')}><option value="Daily">Daily</option><option value="Weekly">Weekly</option><option value="Monthly">Monthly</option></Form.Select></Form.Group></div>
+        {balanceError && <Alert variant="danger">{balanceError}</Alert>}
+        {balanceLoading ? <div className="text-center py-4"><Spinner animation="border" role="status"><span className="visually-hidden">Loading balance history</span></Spinner></div> : balanceHistory && !balanceHistory.isAvailable ? <div className="chart-empty">{balanceHistory.message}</div> : balanceHistory && balanceHistory.points.length === 0 ? <div className="chart-empty">{balanceHistory.message ?? 'No balance history is available for the selected date range.'}</div> : balanceHistory && <>
+          {balanceHistory.message && <Alert variant="info" className="py-2">{balanceHistory.message}</Alert>}
+          <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><LineChart data={balanceHistory.points.map(point => ({ ...point, label: displayDate(point.date) }))} margin={{ top: 8, right: 12, left: 8, bottom: 4 }}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} /><YAxis tickLine={false} axisLine={false} tickFormatter={value => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value))} /><Tooltip formatter={value => money(Number(value), balanceHistory.currency)} /><Line type="monotone" dataKey="balance" name={balanceHistory.classification === 'Liability' ? 'Outstanding balance' : 'Account balance'} stroke={balanceHistory.classification === 'Liability' ? '#d87565' : '#17845f'} strokeWidth={2.5} dot={balanceHistory.points.length < 40} activeDot={{ r: 5 }} /></LineChart></ResponsiveContainer></div>
+          <div className="small text-secondary mt-2">{displayDate(balanceHistory.periodStart)} – {displayDate(balanceHistory.periodEnd)} · {balanceHistory.interval.toLowerCase()} balance</div>
+        </>}
+      </div>}
 
       {overview.currencies.length > 1 && <div className="d-flex align-items-center gap-2 mb-3"><Form.Label className="mb-0 small text-secondary" htmlFor="dashboard-currency">Charts currency</Form.Label><Form.Select id="dashboard-currency" size="sm" className="dashboard-currency-select" value={currency} onChange={event => setCurrency(event.target.value)}>{overview.currencies.map(item => <option key={item.currency} value={item.currency}>{item.currency}</option>)}</Form.Select></div>}
 

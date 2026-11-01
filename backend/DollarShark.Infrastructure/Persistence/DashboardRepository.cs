@@ -17,6 +17,53 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
             .Select(account => account.Currency)
             .SingleOrDefaultAsync(cancellationToken);
 
+    public async Task<DashboardBalanceProfile?> GetBalanceProfileAsync(Guid accountId, CancellationToken cancellationToken)
+    {
+        var userId = UserId;
+        var account = await db.FinancialAccounts.AsNoTracking()
+            .Where(x => x.Id == accountId && x.UserId == userId && x.IsActive)
+            .Select(x => new { x.Id, x.Name, x.AccountType, x.Currency, x.OpeningBalance, x.OpeningBalanceDate })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (account is null) return null;
+        var classification = account.AccountType == "Credit Card" ? AccountClassification.Liability : AccountClassification.Asset;
+        return new DashboardBalanceProfile(account.Id, account.Name, account.AccountType, account.Currency,
+            classification, account.OpeningBalance, account.OpeningBalanceDate);
+    }
+
+    public async Task<IReadOnlyList<DashboardDailyBalanceMovement>> GetDailyBalanceMovementsAsync(
+        Guid accountId, DateOnly openingBalanceDate, DateOnly to, AccountClassification classification,
+        CancellationToken cancellationToken)
+    {
+        var userId = UserId;
+        var accountMovements = db.Transactions.AsNoTracking()
+            .Where(x => x.UserId == userId && x.FinancialAccountId == accountId &&
+                x.TransactionDate > openingBalanceDate && x.TransactionDate <= to);
+        var groupedMovements = await accountMovements
+            .GroupBy(x => new
+            {
+                x.TransactionDate,
+                x.TransactionType,
+                IsLinkedTransfer = x.LinkedTransferTransactionId.HasValue,
+                IsPositiveAmount = x.Amount > 0
+            })
+            .Select(group => new
+            {
+                group.Key.TransactionDate,
+                group.Key.TransactionType,
+                group.Key.IsLinkedTransfer,
+                Amount = group.Sum(x => x.Amount)
+            })
+            .OrderBy(x => x.TransactionDate).ThenBy(x => x.TransactionType)
+            .ToListAsync(cancellationToken);
+        return groupedMovements
+            .GroupBy(x => x.TransactionDate)
+            .Select(group => new DashboardDailyBalanceMovement(group.Key, group.Sum(x =>
+                new Transaction { Amount = x.Amount, TransactionType = x.TransactionType }
+                    .GetAccountBalanceEffect(classification, x.IsLinkedTransfer))))
+            .OrderBy(x => x.Date)
+            .ToArray();
+    }
+
     public async Task<IReadOnlyList<DashboardTotals>> GetTotalsAsync(
         DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
     {

@@ -203,6 +203,27 @@ export type DashboardMonthlyActivity = {
   transferCount: number;
 };
 
+export type AccountBalancePoint = {
+  date: string;
+  balance: number;
+};
+
+export type AccountBalanceHistory = {
+  accountId: string;
+  accountName: string;
+  accountType: string;
+  classification: 'Asset' | 'Liability';
+  currency: string;
+  openingBalance: number | null;
+  openingBalanceDate: string | null;
+  isAvailable: boolean;
+  message: string | null;
+  periodStart: string;
+  periodEnd: string;
+  interval: 'Daily' | 'Weekly' | 'Monthly';
+  points: AccountBalancePoint[];
+};
+
 export type DashboardRecentTransaction = {
   id: string;
   transactionDate: string;
