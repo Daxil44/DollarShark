@@ -51,6 +51,8 @@ export type Transaction = {
   categoryId: string | null;
   categoryName: string | null;
   createdAtUtc: string;
+  linkedTransferTransactionId: string | null;
+  linkedTransferCounterpart: TransferTransactionSummary | null;
 };
 
 export type TransactionInput = {
@@ -69,6 +71,23 @@ export type TransactionPage = {
   pageSize: number;
   totalCount: number;
   totalPages: number;
+};
+
+export type TransferTransactionSummary = {
+  id: string;
+  transactionDate: string;
+  description: string;
+  amount: number;
+  currency: string;
+  financialAccountId: string;
+  accountName: string;
+};
+
+export type TransferSuggestion = {
+  outgoing: TransferTransactionSummary;
+  incoming: TransferTransactionSummary;
+  daysApart: number;
+  matchReason: string;
 };
 
 export type StatementImport = {

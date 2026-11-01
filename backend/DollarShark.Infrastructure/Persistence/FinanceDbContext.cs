@@ -55,6 +55,8 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         transaction.Property(x => x.TransactionType).HasConversion<string>().HasMaxLength(16)
             .HasDefaultValue(TransactionType.Expense);
         transaction.HasIndex(x => new { x.FinancialAccountId, x.TransactionDate });
+        transaction.HasIndex(x => x.LinkedTransferTransactionId).IsUnique()
+            .HasFilter("[LinkedTransferTransactionId] IS NOT NULL");
         transaction.HasIndex(x => x.CategoryId);
         transaction.HasIndex(x => x.UserId);
         transaction.HasIndex(x => new { x.FinancialAccountId, x.ExternalReference })
@@ -64,6 +66,8 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
             .HasForeignKey(x => x.FinancialAccountId).OnDelete(DeleteBehavior.Cascade);
         transaction.HasOne(x => x.Category).WithMany(x => x.Transactions)
             .HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.SetNull);
+        transaction.HasOne(x => x.LinkedTransferTransaction).WithMany()
+            .HasForeignKey(x => x.LinkedTransferTransactionId).OnDelete(DeleteBehavior.Restrict);
 
         var statement = modelBuilder.Entity<StatementImport>();
         statement.HasKey(x => x.Id);

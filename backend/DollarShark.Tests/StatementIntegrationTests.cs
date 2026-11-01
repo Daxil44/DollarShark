@@ -163,7 +163,8 @@ public sealed class StatementIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, (await ParseCsv(userB, csvStatement.Id, null)).StatusCode);
 
         var repeated = await Task.WhenAll(ParseCsv(userB, csvStatement.Id, csrfB), ParseCsv(userB, csvStatement.Id, csrfB));
-        Assert.All(repeated, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        foreach (var response in repeated)
+            Assert.True(response.StatusCode == HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         using var previewJson = JsonDocument.Parse(await repeated[0].Content.ReadAsStringAsync());
         var preview = previewJson.RootElement;
         Assert.Equal(1, preview.GetProperty("validRows").GetInt32());

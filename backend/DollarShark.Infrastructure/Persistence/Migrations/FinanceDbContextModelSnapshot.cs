@@ -304,6 +304,9 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("FinancialAccountId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("LinkedTransferTransactionId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("SubDescription")
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
@@ -325,6 +328,10 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CategoryId");
+
+                    b.HasIndex("LinkedTransferTransactionId")
+                        .IsUnique()
+                        .HasFilter("[LinkedTransferTransactionId] IS NOT NULL");
 
                     b.HasIndex("UserId");
 
@@ -589,6 +596,11 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("DollarShark.Domain.Transaction", "LinkedTransferTransaction")
+                        .WithMany()
+                        .HasForeignKey("LinkedTransferTransactionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("DollarShark.Infrastructure.Identity.ApplicationUser", null)
                         .WithMany()
                         .HasForeignKey("UserId")
@@ -597,6 +609,8 @@ namespace DollarShark.Infrastructure.Persistence.Migrations
                     b.Navigation("Category");
 
                     b.Navigation("FinancialAccount");
+
+                    b.Navigation("LinkedTransferTransaction");
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>

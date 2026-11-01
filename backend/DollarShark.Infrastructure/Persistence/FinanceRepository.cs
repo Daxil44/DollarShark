@@ -2,12 +2,15 @@ using DollarShark.Application.Accounts;
 using DollarShark.Application.Categories;
 using DollarShark.Application.Common;
 using DollarShark.Application.Transactions;
+using DollarShark.Application.Transfers;
 using DollarShark.Domain;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 
 namespace DollarShark.Infrastructure.Persistence;
 
-public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext currentUser) : IAccountRepository, ICategoryRepository, ITransactionRepository
+public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext currentUser) : IAccountRepository, ICategoryRepository, ITransactionRepository, ITransferRepository
 {
     private static readonly SemaphoreSlim SqliteDuplicateQueryGate = new(1, 1);
     private string UserId => string.IsNullOrWhiteSpace(currentUser.UserId)
@@ -46,7 +49,8 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
                     FinancialAccountId = x.FinancialAccountId,
                     TransactionDate = x.TransactionDate,
                     Amount = x.Amount,
-                    TransactionType = x.TransactionType
+                    TransactionType = x.TransactionType,
+                    LinkedTransferTransactionId = x.LinkedTransferTransactionId
                 }).ToListAsync(cancellationToken);
         }
 
@@ -141,7 +145,13 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
             .Select(x => new TransactionDto(
                 x.Id, x.TransactionDate, x.Description, x.Amount, x.TransactionType.ToString(), x.Currency,
                 x.FinancialAccountId, x.FinancialAccount.Name, x.CategoryId, x.Category == null ? null : x.Category.Name,
-                x.CreatedAtUtc, x.SubDescription))
+                x.CreatedAtUtc, x.SubDescription,
+                x.LinkedTransferTransaction != null && x.LinkedTransferTransaction.UserId == UserId ? x.LinkedTransferTransactionId : null,
+                x.LinkedTransferTransaction == null || x.LinkedTransferTransaction.UserId != UserId ? null : new LinkedTransferTransactionDto(
+                    x.LinkedTransferTransaction.Id, x.LinkedTransferTransaction.TransactionDate,
+                    x.LinkedTransferTransaction.Description, x.LinkedTransferTransaction.Amount,
+                    x.LinkedTransferTransaction.Currency, x.LinkedTransferTransaction.FinancialAccountId,
+                    x.LinkedTransferTransaction.FinancialAccount.Name)))
             .ToListAsync(cancellationToken);
         return new TransactionPage(items, filter.Page, filter.PageSize, total,
             total == 0 ? 0 : (int)Math.Ceiling(total / (double)filter.PageSize));
@@ -152,7 +162,13 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
             .Select(x => new TransactionDto(
                 x.Id, x.TransactionDate, x.Description, x.Amount, x.TransactionType.ToString(), x.Currency,
                 x.FinancialAccountId, x.FinancialAccount.Name, x.CategoryId, x.Category == null ? null : x.Category.Name,
-                x.CreatedAtUtc, x.SubDescription))
+                x.CreatedAtUtc, x.SubDescription,
+                x.LinkedTransferTransaction != null && x.LinkedTransferTransaction.UserId == UserId ? x.LinkedTransferTransactionId : null,
+                x.LinkedTransferTransaction == null || x.LinkedTransferTransaction.UserId != UserId ? null : new LinkedTransferTransactionDto(
+                    x.LinkedTransferTransaction.Id, x.LinkedTransferTransaction.TransactionDate,
+                    x.LinkedTransferTransaction.Description, x.LinkedTransferTransaction.Amount,
+                    x.LinkedTransferTransaction.Currency, x.LinkedTransferTransaction.FinancialAccountId,
+                    x.LinkedTransferTransaction.FinancialAccount.Name)))
             .SingleOrDefaultAsync(cancellationToken);
 
     Task<Transaction?> ITransactionRepository.FindAsync(Guid id, CancellationToken cancellationToken) =>
@@ -164,6 +180,131 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
     public Task<string?> GetAccountCurrencyAsync(Guid id, CancellationToken cancellationToken) =>
         db.FinancialAccounts.AsNoTracking().Where(x => x.Id == id && x.UserId == UserId)
             .Select(x => x.Currency).SingleOrDefaultAsync(cancellationToken);
+
+    public async Task<TransferOperationResult> LinkAsync(
+        Guid outgoingTransactionId, Guid incomingTransactionId, CancellationToken cancellationToken)
+    {
+        await using var databaseTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        try
+        {
+            var userId = UserId;
+            var ids = new[] { outgoingTransactionId, incomingTransactionId };
+            var pair = await db.Transactions.Include(x => x.FinancialAccount)
+                .Where(x => ids.Contains(x.Id) && x.UserId == userId)
+                .ToListAsync(cancellationToken);
+            var outgoing = pair.SingleOrDefault(x => x.Id == outgoingTransactionId);
+            var incoming = pair.SingleOrDefault(x => x.Id == incomingTransactionId);
+            if (outgoing is null || incoming is null)
+            {
+                await databaseTransaction.RollbackAsync(cancellationToken);
+                return new TransferOperationResult(TransferOperationState.NotFound);
+            }
+
+            var validationError = LinkedTransferRules.Validate(outgoing, incoming);
+            if (validationError is not null)
+            {
+                await databaseTransaction.RollbackAsync(cancellationToken);
+                return new TransferOperationResult(TransferOperationState.Invalid, ValidationError: validationError);
+            }
+
+            outgoing.LinkedTransferTransactionId = incoming.Id;
+            incoming.LinkedTransferTransactionId = outgoing.Id;
+            await db.SaveChangesAsync(cancellationToken);
+            await databaseTransaction.CommitAsync(cancellationToken);
+            return new TransferOperationResult(TransferOperationState.Succeeded, ToTransferPair(outgoing, incoming));
+        }
+        catch (DbUpdateException)
+        {
+            await databaseTransaction.RollbackAsync(cancellationToken);
+            db.ChangeTracker.Clear();
+            return new TransferOperationResult(TransferOperationState.Conflict);
+        }
+    }
+
+    public async Task<TransferOperationResult> UnlinkAsync(Guid transactionId, CancellationToken cancellationToken)
+    {
+        await using var databaseTransaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        var userId = UserId;
+        var transaction = await db.Transactions.Include(x => x.FinancialAccount)
+            .SingleOrDefaultAsync(x => x.Id == transactionId && x.UserId == userId, cancellationToken);
+        if (transaction is null)
+        {
+            await databaseTransaction.RollbackAsync(cancellationToken);
+            return new TransferOperationResult(TransferOperationState.NotFound);
+        }
+        if (transaction.LinkedTransferTransactionId is not Guid counterpartId)
+        {
+            await databaseTransaction.RollbackAsync(cancellationToken);
+            return new TransferOperationResult(TransferOperationState.Invalid);
+        }
+
+        var counterpart = await db.Transactions.Include(x => x.FinancialAccount)
+            .SingleOrDefaultAsync(x => x.Id == counterpartId && x.UserId == userId, cancellationToken);
+        if (counterpart is null || counterpart.LinkedTransferTransactionId != transaction.Id)
+        {
+            await databaseTransaction.RollbackAsync(cancellationToken);
+            return new TransferOperationResult(TransferOperationState.Conflict);
+        }
+
+        var outgoing = transaction.Amount < 0 ? transaction : counterpart;
+        var incoming = transaction.Amount > 0 ? transaction : counterpart;
+        transaction.LinkedTransferTransactionId = null;
+        counterpart.LinkedTransferTransactionId = null;
+        await db.SaveChangesAsync(cancellationToken);
+        await databaseTransaction.CommitAsync(cancellationToken);
+        return new TransferOperationResult(TransferOperationState.Succeeded, ToTransferPair(outgoing, incoming));
+    }
+
+    public async Task<IReadOnlyList<TransferSuggestionDto>> GetSuggestionsAsync(CancellationToken cancellationToken)
+    {
+        var candidates = await db.Transactions.AsNoTracking()
+            .Where(x => x.UserId == UserId && x.FinancialAccount.UserId == UserId && x.TransactionType == TransactionType.Transfer &&
+                x.LinkedTransferTransactionId == null && x.Amount != 0 && x.Currency == x.FinancialAccount.Currency)
+            .OrderByDescending(x => x.TransactionDate)
+            .Select(x => new LinkedTransferTransactionDto(x.Id, x.TransactionDate, x.Description, x.Amount,
+                x.Currency, x.FinancialAccountId, x.FinancialAccount.Name))
+            .ToListAsync(cancellationToken);
+
+        var suggestions = new List<(TransferSuggestionDto Suggestion, int DescriptionScore)>();
+        foreach (var group in candidates.GroupBy(x => (Currency: x.Currency.ToUpperInvariant(), Amount: decimal.Abs(x.Amount))))
+        {
+            var outgoing = group.Where(x => x.Amount < 0).ToArray();
+            var incoming = group.Where(x => x.Amount > 0).ToArray();
+            foreach (var source in outgoing)
+            foreach (var destination in incoming)
+            {
+                if (source.FinancialAccountId == destination.FinancialAccountId) continue;
+                var daysApart = Math.Abs(source.TransactionDate.DayNumber - destination.TransactionDate.DayNumber);
+                if (daysApart > 5) continue;
+                var descriptionScore = DescriptionSimilarity(source.Description, destination.Description);
+                var details = descriptionScore >= 50 ? "; descriptions are similar" : string.Empty;
+                var reason = $"Equal absolute amount, opposite directions, and dates {daysApart} day(s) apart{details}.";
+                suggestions.Add((new TransferSuggestionDto(source, destination, daysApart, reason), descriptionScore));
+            }
+        }
+
+        return suggestions.OrderByDescending(x => x.DescriptionScore).ThenBy(x => x.Suggestion.DaysApart)
+            .ThenBy(x => x.Suggestion.Outgoing.TransactionDate).Take(100).Select(x => x.Suggestion).ToArray();
+    }
+
+    private static TransferPairDto ToTransferPair(Transaction outgoing, Transaction incoming) =>
+        new(ToTransferSummary(outgoing), ToTransferSummary(incoming));
+
+    private static LinkedTransferTransactionDto ToTransferSummary(Transaction transaction) =>
+        new(transaction.Id, transaction.TransactionDate, transaction.Description, transaction.Amount,
+            transaction.Currency, transaction.FinancialAccountId, transaction.FinancialAccount.Name);
+
+    private static int DescriptionSimilarity(string left, string right)
+    {
+        static HashSet<string> Words(string description) => new(new string(description.ToLowerInvariant()
+            .Select(character => char.IsLetterOrDigit(character) ? character : ' ').ToArray())
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+
+        var leftWords = Words(left);
+        var rightWords = Words(right);
+        var union = leftWords.Union(rightWords).Count();
+        return union == 0 ? 0 : (int)Math.Round(leftWords.Intersect(rightWords).Count() * 100d / union);
+    }
 
     public Task<bool> CategoryExistsAsync(Guid id, CancellationToken cancellationToken) =>
         VisibleCategories().AnyAsync(x => x.Id == id, cancellationToken);

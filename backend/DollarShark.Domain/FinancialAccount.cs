@@ -31,6 +31,6 @@ public sealed class FinancialAccount
 
         return openingBalance + transactions
             .Where(transaction => transaction.FinancialAccountId == Id && transaction.TransactionDate > openingBalanceDate)
-            .Sum(transaction => transaction.GetAccountBalanceEffect(Classification));
+            .Sum(transaction => transaction.GetAccountBalanceEffect(Classification, transaction.LinkedTransferTransactionId.HasValue));
     }
 }
