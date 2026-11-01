@@ -146,7 +146,9 @@ public sealed class AuthenticationIntegrationTests
         var dashboardAResponse = await userA.GetAsync("/api/dashboard/overview?from=2026-10-01&to=2026-10-24");
         Assert.True(dashboardAResponse.IsSuccessStatusCode, await dashboardAResponse.Content.ReadAsStringAsync());
         using var dashboardA = JsonDocument.Parse(await dashboardAResponse.Content.ReadAsStringAsync());
-        Assert.Empty(dashboardA.RootElement.GetProperty("currencies").EnumerateArray());
+        var dashboardACurrency = Assert.Single(dashboardA.RootElement.GetProperty("currencies").EnumerateArray());
+        Assert.Equal("CAD", dashboardACurrency.GetProperty("currency").GetString());
+        Assert.Equal(0, dashboardACurrency.GetProperty("transactionCount").GetInt32());
         Assert.Empty(dashboardA.RootElement.GetProperty("recentTransactions").EnumerateArray());
 
         using var dashboardB = JsonDocument.Parse(await (await userB.GetAsync(

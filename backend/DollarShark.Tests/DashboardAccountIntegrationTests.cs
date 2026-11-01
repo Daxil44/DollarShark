@@ -24,7 +24,7 @@ public sealed class DashboardAccountIntegrationTests
         var accounts = new AccountService(finance);
         var transactions = new TransactionService(finance);
         var dashboardRepository = new DashboardRepository(db.Context, currentUser);
-        var dashboard = new DashboardService(dashboardRepository);
+        var dashboard = new DashboardService(dashboardRepository, accounts);
         var date = new DateOnly(2026, 10, 15);
         var openingDate = date.AddDays(-5);
 
@@ -84,7 +84,7 @@ public sealed class DashboardAccountIntegrationTests
         db.Context.FinancialAccounts.Add(foreign);
         await db.Context.SaveChangesAsync(Ct);
 
-        var dashboard = new DashboardService(new DashboardRepository(db.Context, owner));
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, owner), accounts);
         var date = new DateOnly(2026, 10, 1);
         var emptyResult = await dashboard.GetOverviewAsync(new DashboardQuery { AccountId = empty.Id, From = date, To = date }, Ct);
         Assert.True(emptyResult.IsSuccess);
@@ -116,7 +116,7 @@ public sealed class DashboardAccountIntegrationTests
         await transactions.CreateAsync(new TransactionRequest(date, "Move", -75m, "Transfer", cad.Id, null), Ct);
         await transactions.CreateAsync(new TransactionRequest(date, "Deposit", 25m, "Income", usd.Id, null), Ct);
 
-        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser));
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser), accounts);
         var result = await dashboard.GetOverviewAsync(new DashboardQuery { From = date, To = date }, Ct);
         Assert.True(result.IsSuccess);
         Assert.Null(result.Value!.AccountId);
@@ -124,6 +124,90 @@ public sealed class DashboardAccountIntegrationTests
         Assert.Equal(500m, Assert.Single(result.Value.Currencies, item => item.Currency == "CAD").Income);
         Assert.Equal(25m, Assert.Single(result.Value.Currencies, item => item.Currency == "USD").Income);
         Assert.Equal(3, result.Value.RecentTransactions.Count);
+    }
+
+    [Fact]
+    public async Task ConsolidatedOverviewReconcilesTransactionsAndBalancesWithoutCountingTransferSides()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        var currentUser = new TestCurrentUser();
+        var finance = new FinanceRepository(db.Context, currentUser);
+        var accounts = new AccountService(finance);
+        var transactions = new TransactionService(finance);
+        var transfers = new TransferService(finance);
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser), accounts);
+        var date = new DateOnly(2026, 10, 20);
+        var openingDate = date.AddDays(-1);
+        var chequing = (await accounts.CreateAsync(new AccountRequest("Everyday", "Bank", "Chequing", "CAD", null, 1000m, openingDate), Ct)).Value!;
+        var savings = (await accounts.CreateAsync(new AccountRequest("Reserve", "Bank", "Savings", "CAD", null, 500m, openingDate), Ct)).Value!;
+        var unconfiguredSavings = (await accounts.CreateAsync(new AccountRequest("Unknown reserve", "Bank", "Savings", "CAD", null), Ct)).Value!;
+        var card = (await accounts.CreateAsync(new AccountRequest("Rewards", "Card Co", "Credit Card", "CAD", null, 300m, openingDate), Ct)).Value!;
+        var investment = (await accounts.CreateAsync(new AccountRequest("Portfolio", "Broker", "Investment", "CAD", null, 200m, openingDate), Ct)).Value!;
+        var usd = (await accounts.CreateAsync(new AccountRequest("USD savings", "Bank", "Savings", "USD", null, 50m, openingDate), Ct)).Value!;
+        var inactive = (await accounts.CreateAsync(new AccountRequest("Closed", "Bank", "Chequing", "CAD", null, 5000m, openingDate), Ct)).Value!;
+        await accounts.SetStatusAsync(inactive.Id, new AccountStatusRequest(false), Ct);
+        var foreign = new FinancialAccount
+        {
+            UserId = "other-dashboard-user", Name = "Private", Institution = "Bank", AccountType = "Chequing",
+            Currency = "CAD", OpeningBalance = 10000m, OpeningBalanceDate = openingDate
+        };
+        db.Context.FinancialAccounts.Add(foreign);
+        await db.Context.SaveChangesAsync(Ct);
+
+        async Task<TransactionDto> Add(Guid accountId, string description, decimal amount, string type) =>
+            (await transactions.CreateAsync(new TransactionRequest(date, description, amount, type, accountId, null), Ct)).Value!;
+        await Add(chequing.Id, "Salary", 1000m, "Income");
+        await Add(chequing.Id, "Groceries", -200m, "Expense");
+        var investmentOut = await Add(chequing.Id, "Investment contribution", -100m, "Transfer");
+        var investmentIn = await Add(investment.Id, "Contribution received", 100m, "Transfer");
+        var savingsOut = await Add(chequing.Id, "Savings transfer", -50m, "Transfer");
+        var savingsIn = await Add(savings.Id, "Savings deposit", 50m, "Transfer");
+        var cardOut = await Add(chequing.Id, "Card payment", -40m, "Transfer");
+        var cardIn = await Add(card.Id, "Payment received", 40m, "Transfer");
+        await Add(usd.Id, "USD pay", 75m, "Income");
+        Assert.Equal(200, (await transfers.LinkAsync(new TransferLinkRequest(investmentOut.Id, investmentIn.Id), Ct)).StatusCode);
+        Assert.Equal(200, (await transfers.LinkAsync(new TransferLinkRequest(savingsOut.Id, savingsIn.Id), Ct)).StatusCode);
+        Assert.Equal(200, (await transfers.LinkAsync(new TransferLinkRequest(cardOut.Id, cardIn.Id), Ct)).StatusCode);
+
+        var result = await dashboard.GetOverviewAsync(new DashboardQuery { From = date, To = date }, Ct);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value!.Currencies.Count);
+        var cad = Assert.Single(result.Value.Currencies, x => x.Currency == "CAD");
+        Assert.Equal(1000m, cad.Income);
+        Assert.Equal(200m, cad.Expenses);
+        Assert.Equal(800m, cad.NetCashFlow);
+        Assert.Equal(75m, Assert.Single(result.Value.Currencies, x => x.Currency == "USD").Income);
+        Assert.Equal(6, result.Value.Accounts.Count);
+        Assert.DoesNotContain(result.Value.Accounts, x => x.Id == inactive.Id || x.Name == "Private");
+
+        var cadBalances = Assert.Single(result.Value.BalanceTotals, x => x.Currency == "CAD");
+        Assert.Null(cadBalances.CashBalance);
+        Assert.Equal(3, cadBalances.CashAccountCount);
+        Assert.Equal(2, cadBalances.CashAccountsWithBalances);
+        Assert.Equal(260m, cadBalances.CreditCardLiabilities);
+        Assert.Equal(300m, cadBalances.RecordedInvestmentBalances);
+        var usdBalances = Assert.Single(result.Value.BalanceTotals, x => x.Currency == "USD");
+        Assert.Equal(125m, usdBalances.CashBalance);
+
+        var cashFlow = Assert.Single(result.Value.MonthlyCashFlow, x => x.Currency == "CAD");
+        Assert.Equal(1000m, cashFlow.Income);
+        Assert.Equal(200m, cashFlow.Expenses);
+        Assert.Equal(800m, cashFlow.NetCashFlow);
+        Assert.Equal(190m, cashFlow.OutgoingTransfers);
+        Assert.Equal(90m, cashFlow.TransfersToOtherAccounts);
+        Assert.Equal(100m, cashFlow.InvestmentContributions);
+        Assert.Equal(610m, cashFlow.RemainingAfterExpensesAndTransfers);
+        Assert.Equal(cashFlow.Income, cashFlow.Expenses + cashFlow.TransfersToOtherAccounts + cashFlow.InvestmentContributions + cashFlow.RemainingAfterExpensesAndTransfers);
+
+        var accountOverview = await dashboard.GetOverviewAsync(new DashboardQuery { AccountId = chequing.Id, From = date, To = date }, Ct);
+        var accountTotals = Assert.Single(accountOverview.Value!.Currencies);
+        Assert.Equal(cad.Income, accountTotals.Income);
+        Assert.Equal(cad.Expenses, accountTotals.Expenses);
+        Assert.Equal(cad.NetCashFlow, accountTotals.NetCashFlow);
+        Assert.Equal(5, result.Value.AccountBalanceTrends.Count);
+        var listedChequing = Assert.Single((await accounts.ListAsync(false, Ct)).Value!, x => x.Id == chequing.Id);
+        Assert.Equal(listedChequing.CalculatedBalance, Assert.Single(result.Value.AccountBalanceTrends, x => x.AccountId == chequing.Id).Points[^1].Balance);
+        Assert.DoesNotContain(result.Value.AccountBalanceTrends, x => x.AccountId == unconfiguredSavings.Id);
     }
 
     [Fact]
@@ -135,7 +219,7 @@ public sealed class DashboardAccountIntegrationTests
         var accounts = new AccountService(finance);
         var transactions = new TransactionService(finance);
         var transfers = new TransferService(finance);
-        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser));
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser), accounts);
         var openingDate = new DateOnly(2026, 1, 10);
         var endDate = new DateOnly(2026, 1, 20);
         var bank = (await accounts.CreateAsync(new AccountRequest("Daily", "Bank", "Chequing", "CAD", null, 1000m, openingDate), Ct)).Value!;
@@ -206,7 +290,7 @@ public sealed class DashboardAccountIntegrationTests
         };
         db.Context.FinancialAccounts.Add(foreign);
         await db.Context.SaveChangesAsync(Ct);
-        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser));
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser), accounts);
 
         var missing = (await dashboard.GetAccountBalanceHistoryAsync(new AccountBalanceHistoryQuery
         {

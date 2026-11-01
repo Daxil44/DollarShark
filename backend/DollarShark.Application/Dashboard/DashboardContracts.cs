@@ -1,4 +1,5 @@
 using DollarShark.Application.Common;
+using DollarShark.Application.Accounts;
 using DollarShark.Domain;
 
 namespace DollarShark.Application.Dashboard;
@@ -48,6 +49,18 @@ public sealed record DashboardCategoryExpense(string Currency, string CategoryNa
 public sealed record DashboardMonthlyTotals(string Currency, string Month, decimal Income, decimal Expenses);
 public sealed record DashboardMonthlyActivity(string Currency, string Month, int TransactionCount,
     int IncomeCount, int ExpenseCount, int RefundCount, int TransferCount);
+public sealed record DashboardAccountSummary(Guid Id, string Name, string Institution, string AccountType,
+    string Classification, string Currency, decimal? OpeningBalance, DateOnly? OpeningBalanceDate, decimal? CalculatedBalance);
+public sealed record DashboardBalanceTotals(string Currency, decimal? CashBalance, int CashAccountCount,
+    int CashAccountsWithBalances, decimal? CreditCardLiabilities, int CreditCardCount, int CreditCardsWithBalances,
+    decimal? RecordedInvestmentBalances, int InvestmentAccountCount, int InvestmentsWithBalances);
+public sealed record DashboardMonthlyCashFlow(string Currency, string Month, decimal Income, decimal Expenses,
+    decimal NetCashFlow, decimal OutgoingTransfers, decimal TransfersToOtherAccounts,
+    decimal InvestmentContributions, decimal RemainingAfterExpensesAndTransfers);
+public sealed record DashboardBalanceMovementAggregate(Guid AccountId, DateOnly Date, TransactionType Type,
+    bool IsLinkedTransfer, decimal Amount);
+public sealed record DashboardAccountBalanceTrend(Guid AccountId, string AccountName, string AccountType,
+    string Classification, string Currency, IReadOnlyList<AccountBalancePoint> Points);
 public sealed record DashboardOverview(
     DateOnly PeriodStart,
     DateOnly PeriodEnd,
@@ -58,7 +71,11 @@ public sealed record DashboardOverview(
     IReadOnlyList<DashboardCategoryExpense> CategoryExpenses,
     IReadOnlyList<DashboardMonthlyTotals> MonthlyTotals,
     IReadOnlyList<DashboardMonthlyActivity> MonthlyActivity,
-    Guid? AccountId);
+    Guid? AccountId,
+    IReadOnlyList<DashboardAccountSummary> Accounts,
+    IReadOnlyList<DashboardBalanceTotals> BalanceTotals,
+    IReadOnlyList<DashboardMonthlyCashFlow> MonthlyCashFlow,
+    IReadOnlyList<DashboardAccountBalanceTrend> AccountBalanceTrends);
 
 public interface IDashboardRepository
 {
@@ -68,9 +85,12 @@ public interface IDashboardRepository
     Task<IReadOnlyList<DashboardCategoryExpense>> GetCategoryExpensesAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null);
     Task<IReadOnlyList<DashboardMonthlyTotals>> GetMonthlyTotalsAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null);
     Task<IReadOnlyList<DashboardMonthlyActivity>> GetMonthlyActivityAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null);
+    Task<IReadOnlyList<DashboardMonthlyCashFlow>> GetMonthlyCashFlowAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null);
     Task<DashboardBalanceProfile?> GetBalanceProfileAsync(Guid accountId, CancellationToken cancellationToken);
     Task<IReadOnlyList<DashboardDailyBalanceMovement>> GetDailyBalanceMovementsAsync(Guid accountId,
         DateOnly openingBalanceDate, DateOnly to, AccountClassification classification, CancellationToken cancellationToken);
+    Task<IReadOnlyList<DashboardBalanceMovementAggregate>> GetBalanceMovementAggregatesAsync(
+        IReadOnlyCollection<Guid> accountIds, DateOnly fromExclusive, DateOnly to, CancellationToken cancellationToken);
 }
 
 public interface IDashboardService
@@ -79,7 +99,7 @@ public interface IDashboardService
     Task<UseCaseResult<AccountBalanceHistory>> GetAccountBalanceHistoryAsync(AccountBalanceHistoryQuery query, CancellationToken cancellationToken);
 }
 
-public sealed class DashboardService(IDashboardRepository repository) : IDashboardService
+public sealed class DashboardService(IDashboardRepository repository, IAccountService accounts) : IDashboardService
 {
     private const int MaxRecentLimit = 20;
     private const int MaxDailyHistoryDays = 366;
@@ -120,9 +140,24 @@ public sealed class DashboardService(IDashboardRepository repository) : IDashboa
         var categoryExpenses = await repository.GetCategoryExpensesAsync(periodStart, periodEnd, cancellationToken, query.AccountId);
         var monthlyTotals = await repository.GetMonthlyTotalsAsync(periodStart, periodEnd, cancellationToken, query.AccountId);
         var monthlyActivity = await repository.GetMonthlyActivityAsync(periodStart, periodEnd, cancellationToken, query.AccountId);
+        var monthlyCashFlow = await repository.GetMonthlyCashFlowAsync(periodStart, periodEnd, cancellationToken, query.AccountId);
+        IReadOnlyList<DashboardAccountSummary> accountSummaries = [];
+        IReadOnlyList<DashboardBalanceTotals> balanceTotals = [];
+        IReadOnlyList<DashboardAccountBalanceTrend> balanceTrends = [];
+        if (query.AccountId is null)
+        {
+            var accountResult = await accounts.ListAsync(false, cancellationToken);
+            var activeAccounts = accountResult.Value ?? [];
+            accountSummaries = activeAccounts.Select(account => new DashboardAccountSummary(
+                account.Id, account.Name, account.Institution, account.AccountType, account.Classification,
+                account.Currency, account.OpeningBalance, account.OpeningBalanceDate, account.CalculatedBalance)).ToArray();
+            balanceTotals = BuildBalanceTotals(accountSummaries);
+            balanceTrends = await BuildAccountBalanceTrendsAsync(accountSummaries, periodStart, periodEnd, cancellationToken);
+        }
         var currentByCurrency = currentTotals.ToDictionary(x => x.Currency, StringComparer.OrdinalIgnoreCase);
         var previousByCurrency = previousTotals.ToDictionary(x => x.Currency, StringComparer.OrdinalIgnoreCase);
         var currencies = currentByCurrency.Keys.Concat(previousByCurrency.Keys)
+            .Concat(accountSummaries.Select(x => x.Currency))
             .Concat(accountCurrency is null ? Array.Empty<string>() : [accountCurrency])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(currency => currency, StringComparer.OrdinalIgnoreCase)
@@ -139,7 +174,69 @@ public sealed class DashboardService(IDashboardRepository repository) : IDashboa
 
         return UseCaseResult<DashboardOverview>.Ok(new DashboardOverview(
             periodStart, periodEnd, previousStart, previousEnd, currencies, recent, categoryExpenses, monthlyTotals,
-            monthlyActivity, query.AccountId));
+            monthlyActivity, query.AccountId, accountSummaries, balanceTotals, monthlyCashFlow, balanceTrends));
+    }
+
+    private static IReadOnlyList<DashboardBalanceTotals> BuildBalanceTotals(IReadOnlyList<DashboardAccountSummary> accounts) =>
+        accounts.GroupBy(account => account.Currency, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var cash = group.Where(x => x.AccountType is "Chequing" or "Savings").ToArray();
+                var cards = group.Where(x => x.AccountType == "Credit Card").ToArray();
+                var investments = group.Where(x => x.AccountType == "Investment").ToArray();
+                var knownCash = cash.Where(x => x.CalculatedBalance.HasValue).Sum(x => x.CalculatedBalance ?? 0m);
+                var knownLiabilities = cards.Where(x => x.CalculatedBalance.HasValue).Sum(x => x.CalculatedBalance ?? 0m);
+                var knownInvestments = investments.Where(x => x.CalculatedBalance.HasValue).Sum(x => x.CalculatedBalance ?? 0m);
+                return new DashboardBalanceTotals(group.Key,
+                    cash.Length == 0 || cash.All(x => x.CalculatedBalance.HasValue) ? knownCash : null,
+                    cash.Length, cash.Count(x => x.CalculatedBalance.HasValue),
+                    cards.Length == 0 || cards.All(x => x.CalculatedBalance.HasValue) ? knownLiabilities : null,
+                    cards.Length, cards.Count(x => x.CalculatedBalance.HasValue),
+                    investments.Any(x => x.CalculatedBalance.HasValue) ? knownInvestments : null,
+                    investments.Length, investments.Count(x => x.CalculatedBalance.HasValue));
+            })
+            .OrderBy(x => x.Currency, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private async Task<IReadOnlyList<DashboardAccountBalanceTrend>> BuildAccountBalanceTrendsAsync(
+        IReadOnlyList<DashboardAccountSummary> accounts, DateOnly from, DateOnly to, CancellationToken cancellationToken)
+    {
+        var configuredAccounts = accounts.Where(x => x.OpeningBalance.HasValue && x.OpeningBalanceDate.HasValue && x.OpeningBalanceDate <= to).ToArray();
+        if (configuredAccounts.Length == 0) return [];
+        var earliestOpeningDate = configuredAccounts.Min(x => x.OpeningBalanceDate!.Value);
+        var aggregates = await repository.GetBalanceMovementAggregatesAsync(
+            configuredAccounts.Select(x => x.Id).ToArray(), earliestOpeningDate, to, cancellationToken);
+        return configuredAccounts.Select(account =>
+        {
+            var openingDate = account.OpeningBalanceDate!.Value;
+            var start = from < openingDate ? openingDate : from;
+            if (to < start) return (DashboardAccountBalanceTrend?)null;
+            var classification = account.Classification == AccountClassification.Liability.ToString()
+                ? AccountClassification.Liability : AccountClassification.Asset;
+            var dailyMovements = aggregates.Where(x => x.AccountId == account.Id && x.Date > openingDate)
+                .GroupBy(x => x.Date)
+                .Select(day => new DashboardDailyBalanceMovement(day.Key, day.Sum(x => new Transaction
+                {
+                    Amount = x.Amount, TransactionType = x.Type
+                }.GetAccountBalanceEffect(classification, x.IsLinkedTransfer))))
+                .OrderBy(x => x.Date).ToArray();
+            var balance = account.OpeningBalance!.Value;
+            var index = 0;
+            while (index < dailyMovements.Length && dailyMovements[index].Date <= start)
+                balance += dailyMovements[index++].Amount;
+            var points = new List<AccountBalancePoint> { new(start, balance) };
+            var cursor = start;
+            while (cursor < to)
+            {
+                var next = NextHistoryPoint(cursor, to, "Monthly");
+                while (index < dailyMovements.Length && dailyMovements[index].Date <= next)
+                    balance += dailyMovements[index++].Amount;
+                points.Add(new AccountBalancePoint(next, balance));
+                cursor = next;
+            }
+            return new DashboardAccountBalanceTrend(account.Id, account.Name, account.AccountType,
+                classification.ToString(), account.Currency, points);
+        }).Where(x => x is not null).Select(x => x!).ToArray();
     }
 
     public async Task<UseCaseResult<AccountBalanceHistory>> GetAccountBalanceHistoryAsync(

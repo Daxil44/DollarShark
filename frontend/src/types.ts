@@ -203,6 +203,52 @@ export type DashboardMonthlyActivity = {
   transferCount: number;
 };
 
+export type DashboardAccountSummary = {
+  id: string;
+  name: string;
+  institution: string;
+  accountType: string;
+  classification: 'Asset' | 'Liability';
+  currency: string;
+  openingBalance: number | null;
+  openingBalanceDate: string | null;
+  calculatedBalance: number | null;
+};
+
+export type DashboardBalanceTotals = {
+  currency: string;
+  cashBalance: number | null;
+  cashAccountCount: number;
+  cashAccountsWithBalances: number;
+  creditCardLiabilities: number | null;
+  creditCardCount: number;
+  creditCardsWithBalances: number;
+  recordedInvestmentBalances: number | null;
+  investmentAccountCount: number;
+  investmentsWithBalances: number;
+};
+
+export type DashboardMonthlyCashFlow = {
+  currency: string;
+  month: string;
+  income: number;
+  expenses: number;
+  netCashFlow: number;
+  outgoingTransfers: number;
+  transfersToOtherAccounts: number;
+  investmentContributions: number;
+  remainingAfterExpensesAndTransfers: number;
+};
+
+export type DashboardAccountBalanceTrend = {
+  accountId: string;
+  accountName: string;
+  accountType: string;
+  classification: 'Asset' | 'Liability';
+  currency: string;
+  points: AccountBalancePoint[];
+};
+
 export type AccountBalancePoint = {
   date: string;
   balance: number;
@@ -246,4 +292,8 @@ export type DashboardOverview = {
   monthlyTotals: DashboardMonthlyTotals[];
   monthlyActivity: DashboardMonthlyActivity[];
   accountId: string | null;
+  accounts: DashboardAccountSummary[];
+  balanceTotals: DashboardBalanceTotals[];
+  monthlyCashFlow: DashboardMonthlyCashFlow[];
+  accountBalanceTrends: DashboardAccountBalanceTrend[];
 };

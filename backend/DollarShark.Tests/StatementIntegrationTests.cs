@@ -223,7 +223,9 @@ public sealed class StatementIntegrationTests
         Assert.Equal(HttpStatusCode.NotFound, (await ConfirmImport(other, statement.Id, confirmBody, otherCsrf)).StatusCode);
 
         var overviewBefore = await owner.GetFromJsonAsync<JsonElement>("/api/dashboard/overview");
-        Assert.Empty(overviewBefore.GetProperty("currencies").EnumerateArray());
+        var accountCurrency = Assert.Single(overviewBefore.GetProperty("currencies").EnumerateArray());
+        Assert.Equal("CAD", accountCurrency.GetProperty("currency").GetString());
+        Assert.Equal(0, accountCurrency.GetProperty("transactionCount").GetInt32());
         var parsed = await ParseCsv(owner, statement.Id, csrf);
         Assert.True(parsed.StatusCode == HttpStatusCode.OK, await parsed.Content.ReadAsStringAsync());
         using (var previewJson = JsonDocument.Parse(await parsed.Content.ReadAsStringAsync()))
