@@ -64,6 +64,36 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
             .ToArray();
     }
 
+    public async Task<IReadOnlyList<DashboardBalanceMovementAggregate>> GetBalanceMovementAggregatesAsync(
+        IReadOnlyCollection<Guid> accountIds, DateOnly fromExclusive, DateOnly to, CancellationToken cancellationToken)
+    {
+        if (accountIds.Count == 0 || fromExclusive >= to) return [];
+        var userId = UserId;
+        var aggregates = await db.Transactions.AsNoTracking()
+            .Where(x => x.UserId == userId && accountIds.Contains(x.FinancialAccountId) &&
+                x.TransactionDate > fromExclusive && x.TransactionDate <= to)
+            .GroupBy(x => new
+            {
+                x.FinancialAccountId,
+                x.TransactionDate,
+                x.TransactionType,
+                IsLinkedTransfer = x.LinkedTransferTransactionId.HasValue,
+                IsPositiveAmount = x.Amount > 0
+            })
+            .Select(group => new
+            {
+                group.Key.FinancialAccountId,
+                group.Key.TransactionDate,
+                group.Key.TransactionType,
+                group.Key.IsLinkedTransfer,
+                Amount = group.Sum(x => x.Amount)
+            })
+            .OrderBy(x => x.FinancialAccountId).ThenBy(x => x.TransactionDate).ThenBy(x => x.TransactionType)
+            .ToListAsync(cancellationToken);
+        return aggregates.Select(x => new DashboardBalanceMovementAggregate(x.FinancialAccountId,
+            x.TransactionDate, x.TransactionType, x.IsLinkedTransfer, x.Amount)).ToArray();
+    }
+
     public async Task<IReadOnlyList<DashboardTotals>> GetTotalsAsync(
         DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
     {
@@ -166,6 +196,36 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
             .ToListAsync(cancellationToken);
 
         return monthlyTotals.Select(x => new DashboardMonthlyTotals(x.Currency, $"{x.Year:D4}-{x.Month:D2}", x.Income, x.Expenses)).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DashboardMonthlyCashFlow>> GetMonthlyCashFlowAsync(
+        DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
+    {
+        var userId = UserId;
+        var transactions = db.Transactions.AsNoTracking()
+            .Where(x => x.UserId == userId && x.TransactionDate >= from && x.TransactionDate <= to)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(x => x.FinancialAccountId == id);
+        var grouped = await transactions
+            .GroupBy(x => new { x.TransactionDate.Year, x.TransactionDate.Month, x.Currency })
+            .Select(group => new
+            {
+                group.Key.Year,
+                group.Key.Month,
+                group.Key.Currency,
+                Income = group.Sum(x => x.TransactionType != TransactionType.Transfer && x.Amount > 0 ? x.Amount : 0m),
+                Expenses = -group.Sum(x => x.TransactionType != TransactionType.Transfer && x.Amount < 0 ? x.Amount : 0m),
+                OutgoingTransfers = -group.Sum(x => x.TransactionType == TransactionType.Transfer && x.Amount < 0 ? x.Amount : 0m),
+                InvestmentContributions = -group.Sum(x => x.TransactionType == TransactionType.Transfer && x.Amount < 0 &&
+                    x.LinkedTransferTransaction != null && x.LinkedTransferTransaction.UserId == userId &&
+                    x.LinkedTransferTransaction.FinancialAccount.AccountType == "Investment" ? x.Amount : 0m)
+            })
+            .OrderBy(x => x.Year).ThenBy(x => x.Month).ThenBy(x => x.Currency)
+            .ToListAsync(cancellationToken);
+        return grouped.Select(x => new DashboardMonthlyCashFlow(x.Currency, $"{x.Year:D4}-{x.Month:D2}",
+            x.Income, x.Expenses, x.Income - x.Expenses, x.OutgoingTransfers,
+            x.OutgoingTransfers - x.InvestmentContributions, x.InvestmentContributions,
+            x.Income - x.Expenses - x.OutgoingTransfers)).ToArray();
     }
 
     public async Task<IReadOnlyList<DashboardMonthlyActivity>> GetMonthlyActivityAsync(
