@@ -11,12 +11,21 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
         ? throw new InvalidOperationException("A signed-in user is required for dashboard data access.")
         : currentUser.UserId;
 
+    public Task<string?> GetActiveAccountCurrencyAsync(Guid accountId, CancellationToken cancellationToken) =>
+        db.FinancialAccounts.AsNoTracking()
+            .Where(account => account.Id == accountId && account.UserId == UserId && account.IsActive)
+            .Select(account => account.Currency)
+            .SingleOrDefaultAsync(cancellationToken);
+
     public async Task<IReadOnlyList<DashboardTotals>> GetTotalsAsync(
-        DateOnly from, DateOnly to, CancellationToken cancellationToken)
+        DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
     {
         var userId = UserId;
-        var totals = await db.Transactions.AsNoTracking()
+        var transactions = db.Transactions.AsNoTracking()
             .Where(transaction => transaction.UserId == userId && transaction.TransactionDate >= from && transaction.TransactionDate <= to)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(transaction => transaction.FinancialAccountId == id);
+        var totals = await transactions
             .GroupBy(transaction => transaction.Currency)
             .Select(group => new
             {
@@ -26,20 +35,27 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
                 Expenses = -group.Sum(transaction => transaction.TransactionType != TransactionType.Transfer && transaction.Amount < 0
                     ? transaction.Amount : 0m),
                 NetCashFlow = group.Sum(transaction => transaction.TransactionType != TransactionType.Transfer
-                    ? transaction.Amount : 0m)
+                    ? transaction.Amount : 0m),
+                MoneyReceived = group.Sum(transaction => transaction.Amount > 0 ? transaction.Amount : 0m),
+                MoneySpent = -group.Sum(transaction => transaction.Amount < 0 ? transaction.Amount : 0m),
+                TransactionCount = group.Count()
             })
             .OrderBy(row => row.Currency)
             .ToListAsync(cancellationToken);
 
-        return totals.Select(row => new DashboardTotals(row.Currency, row.Income, row.Expenses, row.NetCashFlow)).ToArray();
+        return totals.Select(row => new DashboardTotals(row.Currency, row.Income, row.Expenses, row.NetCashFlow,
+            row.MoneyReceived, row.MoneySpent, row.TransactionCount)).ToArray();
     }
 
     public async Task<IReadOnlyList<DashboardRecentTransaction>> GetRecentTransactionsAsync(
-        DateOnly from, DateOnly to, int limit, CancellationToken cancellationToken)
+        DateOnly from, DateOnly to, int limit, CancellationToken cancellationToken, Guid? accountId = null)
     {
         var userId = UserId;
-        return await db.Transactions.AsNoTracking()
+        var transactions = db.Transactions.AsNoTracking()
             .Where(transaction => transaction.UserId == userId && transaction.TransactionDate >= from && transaction.TransactionDate <= to)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(transaction => transaction.FinancialAccountId == id);
+        return await transactions
             .OrderByDescending(transaction => transaction.TransactionDate)
             .ThenByDescending(transaction => transaction.Id)
             .Take(limit)
@@ -56,11 +72,14 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
     }
 
     public async Task<IReadOnlyList<DashboardCategoryExpense>> GetCategoryExpensesAsync(
-        DateOnly from, DateOnly to, CancellationToken cancellationToken)
+        DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
     {
         var userId = UserId;
-        var groupedExpenses = await db.Transactions.AsNoTracking()
+        var transactions = db.Transactions.AsNoTracking()
             .Where(x => x.UserId == userId && x.TransactionDate >= from && x.TransactionDate <= to && x.TransactionType != TransactionType.Transfer && x.Amount < 0)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(x => x.FinancialAccountId == id);
+        var groupedExpenses = await transactions
             .GroupBy(x => new { x.Currency, x.CategoryId })
             .Select(group => new { group.Key.Currency, group.Key.CategoryId, Amount = -group.Sum(x => x.Amount) })
             .ToListAsync(cancellationToken);
@@ -79,11 +98,14 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
     }
 
     public async Task<IReadOnlyList<DashboardMonthlyTotals>> GetMonthlyTotalsAsync(
-        DateOnly from, DateOnly to, CancellationToken cancellationToken)
+        DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
     {
         var userId = UserId;
-        var monthlyTotals = await db.Transactions.AsNoTracking()
+        var transactions = db.Transactions.AsNoTracking()
             .Where(x => x.UserId == userId && x.TransactionDate >= from && x.TransactionDate <= to && x.TransactionType != TransactionType.Transfer)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(x => x.FinancialAccountId == id);
+        var monthlyTotals = await transactions
             .GroupBy(x => new { x.TransactionDate.Year, x.TransactionDate.Month, x.Currency })
             .Select(group => new
             {
@@ -97,5 +119,32 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
             .ToListAsync(cancellationToken);
 
         return monthlyTotals.Select(x => new DashboardMonthlyTotals(x.Currency, $"{x.Year:D4}-{x.Month:D2}", x.Income, x.Expenses)).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DashboardMonthlyActivity>> GetMonthlyActivityAsync(
+        DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
+    {
+        var userId = UserId;
+        var transactions = db.Transactions.AsNoTracking()
+            .Where(x => x.UserId == userId && x.TransactionDate >= from && x.TransactionDate <= to)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(x => x.FinancialAccountId == id);
+        var activity = await transactions
+            .GroupBy(x => new { x.TransactionDate.Year, x.TransactionDate.Month, x.Currency })
+            .Select(group => new
+            {
+                group.Key.Year,
+                group.Key.Month,
+                group.Key.Currency,
+                TransactionCount = group.Count(),
+                IncomeCount = group.Count(x => x.TransactionType == TransactionType.Income),
+                ExpenseCount = group.Count(x => x.TransactionType == TransactionType.Expense),
+                RefundCount = group.Count(x => x.TransactionType == TransactionType.Refund),
+                TransferCount = group.Count(x => x.TransactionType == TransactionType.Transfer)
+            })
+            .OrderBy(x => x.Year).ThenBy(x => x.Month).ThenBy(x => x.Currency)
+            .ToListAsync(cancellationToken);
+        return activity.Select(x => new DashboardMonthlyActivity(x.Currency, $"{x.Year:D4}-{x.Month:D2}",
+            x.TransactionCount, x.IncomeCount, x.ExpenseCount, x.RefundCount, x.TransferCount)).ToArray();
     }
 }
