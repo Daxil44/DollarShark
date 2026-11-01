@@ -14,4 +14,15 @@ public sealed class DashboardController(IDashboardService service) : ApiControll
         var result = await service.GetOverviewAsync(query, cancellationToken);
         return result.IsSuccess ? Ok(result.Value) : Failure(result);
     }
+
+    [HttpGet("accounts/{accountId:guid}/balance-history")]
+    public async Task<IActionResult> AccountBalanceHistory(
+        Guid accountId, [FromQuery] DateOnly? from, [FromQuery] DateOnly? to,
+        [FromQuery] string interval = "Daily", CancellationToken cancellationToken = default)
+    {
+        var result = await service.GetAccountBalanceHistoryAsync(
+            new AccountBalanceHistoryQuery { AccountId = accountId, From = from, To = to, Interval = interval },
+            cancellationToken);
+        return result.IsSuccess ? Ok(result.Value) : Failure(result);
+    }
 }
