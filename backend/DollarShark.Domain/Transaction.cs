@@ -18,13 +18,15 @@ public sealed class Transaction
     public TransactionType TransactionType { get; set; } = TransactionType.Expense;
     public string Currency { get; set; } = "CAD";
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Guid? LinkedTransferTransactionId { get; set; }
+    public Transaction? LinkedTransferTransaction { get; set; }
 
     /// <summary>
     /// Returns this transaction's effect on its account's balance convention without changing Amount.
     /// Asset balances are owned value; liability balances are positive amounts owed.
-    /// Expense/Income/Refund signs follow reporting convention; transfers use their signed account-side amount.
+    /// Expense/Income/Refund signs follow reporting convention. A linked transfer into a liability reduces the amount owed.
     /// </summary>
-    public decimal GetAccountBalanceEffect(AccountClassification classification) => classification switch
+    public decimal GetAccountBalanceEffect(AccountClassification classification, bool isLinkedTransfer = false) => classification switch
     {
         AccountClassification.Asset => TransactionType switch
         {
@@ -37,7 +39,7 @@ public sealed class Transaction
         {
             TransactionType.Expense => decimal.Abs(Amount),
             TransactionType.Income or TransactionType.Refund => -decimal.Abs(Amount),
-            TransactionType.Transfer => Amount,
+            TransactionType.Transfer => isLinkedTransfer ? -Amount : Amount,
             _ => throw new ArgumentOutOfRangeException(nameof(TransactionType))
         },
         _ => throw new ArgumentOutOfRangeException(nameof(classification))

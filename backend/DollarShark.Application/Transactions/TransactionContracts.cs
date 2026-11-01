@@ -16,7 +16,12 @@ public sealed record TransactionRequest(
 public sealed record TransactionDto(
     Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string TransactionType,
     string Currency, Guid FinancialAccountId, string AccountName, Guid? CategoryId, string? CategoryName, DateTime CreatedAtUtc,
-    string? SubDescription = null);
+    string? SubDescription = null, Guid? LinkedTransferTransactionId = null,
+    LinkedTransferTransactionDto? LinkedTransferCounterpart = null);
+
+public sealed record LinkedTransferTransactionDto(
+    Guid Id, DateOnly TransactionDate, string Description, decimal Amount, string Currency,
+    Guid FinancialAccountId, string AccountName);
 
 public sealed record TransactionPage(
     IReadOnlyList<TransactionDto> Items, int Page, int PageSize, int TotalCount, int TotalPages);
@@ -258,6 +263,8 @@ public sealed class TransactionService(ITransactionRepository repository) : ITra
         if (id == Guid.Empty) return UseCaseResult<TransactionDto>.Invalid(Error("id", "A valid transaction ID is required."));
         var transaction = await repository.FindAsync(id, cancellationToken);
         if (transaction is null) return UseCaseResult<TransactionDto>.NotFound("Transaction was not found.");
+        if (transaction.LinkedTransferTransactionId.HasValue)
+            return UseCaseResult<TransactionDto>.Conflict("Unlink this transfer before editing either transaction.");
         var validation = await ValidateAsync(request, cancellationToken);
         if (validation.Errors is not null) return UseCaseResult<TransactionDto>.Invalid(validation.Errors);
         transaction.TransactionDate = request.TransactionDate;
@@ -279,6 +286,8 @@ public sealed class TransactionService(ITransactionRepository repository) : ITra
         if (id == Guid.Empty) return UseCaseResult<bool>.Invalid(Error("id", "A valid transaction ID is required."));
         var transaction = await repository.FindAsync(id, cancellationToken);
         if (transaction is null) return UseCaseResult<bool>.NotFound("Transaction was not found.");
+        if (transaction.LinkedTransferTransactionId.HasValue)
+            return UseCaseResult<bool>.Conflict("Unlink this transfer before deleting either transaction.");
         repository.Delete(transaction);
         await repository.SaveChangesAsync(cancellationToken);
         return UseCaseResult<bool>.NoContent(true);

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Alert, Badge, Button, Form, Modal, Pagination, Spinner, Table } from 'react-bootstrap';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, apiErrorMessage } from '../api';
-import type { Account, Category, Transaction, TransactionInput, TransactionPage } from '../types';
+import type { Account, Category, Transaction, TransactionInput, TransactionPage, TransferSuggestion, TransferTransactionSummary } from '../types';
 
 type Filters = { search: string; accountId: string; categoryId: string; transactionType: string; year: string; month: string; from: string; to: string };
 type TransactionForm = { transactionDate: string; description: string; amount: string; transactionType: string; financialAccountId: string; categoryId: string };
@@ -9,8 +10,11 @@ const emptyFilters = (): Filters => ({ search: '', accountId: '', categoryId: ''
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyForm = (): TransactionForm => ({ transactionDate: today(), description: '', amount: '', transactionType: 'Expense', financialAccountId: '', categoryId: '' });
 const pageSize = 25;
+const suggestionKey = (suggestion: TransferSuggestion) => [suggestion.outgoing.id, suggestion.incoming.id].sort().join(':');
 
 export default function TransactionsPage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -26,6 +30,12 @@ export default function TransactionsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [form, setForm] = useState<TransactionForm>(emptyForm());
+  const [transferSuggestions, setTransferSuggestions] = useState<TransferSuggestion[]>([]);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+  const [selectedTransferIds, setSelectedTransferIds] = useState<string[]>([]);
+  const [pendingTransfer, setPendingTransfer] = useState<{ outgoing: TransferTransactionSummary; incoming: TransferTransactionSummary } | null>(null);
+  const [viewingCounterpart, setViewingCounterpart] = useState<Transaction | null>(null);
+  const [savingTransfer, setSavingTransfer] = useState(false);
 
   useEffect(() => {
     void Promise.all([
@@ -54,6 +64,31 @@ export default function TransactionsPage() {
   }, [appliedFilters, page.page, sortBy, sortDirection]);
 
   useEffect(() => { void loadTransactions(); }, [loadTransactions]);
+  useEffect(() => { setSelectedTransferIds([]); }, [appliedFilters, page.page]);
+
+  const loadTransferSuggestions = useCallback(async () => {
+    try {
+      const response = await api.get<TransferSuggestion[]>('/api/transfers/suggestions');
+      setTransferSuggestions(response.data);
+    } catch (loadError) {
+      setError(apiErrorMessage(loadError));
+    }
+  }, []);
+
+  useEffect(() => { void loadTransferSuggestions(); }, [loadTransferSuggestions]);
+
+  const focusedTransactionId = searchParams.get('focus');
+  useEffect(() => {
+    if (!focusedTransactionId) {
+      setViewingCounterpart(null);
+      return;
+    }
+    let cancelled = false;
+    api.get<Transaction>('/api/transactions/' + focusedTransactionId)
+      .then(response => { if (!cancelled) setViewingCounterpart(response.data); })
+      .catch(loadError => { if (!cancelled) setError(apiErrorMessage(loadError)); });
+    return () => { cancelled = true; };
+  }, [focusedTransactionId]);
 
   function openCreate() {
     setEditing(null);
@@ -138,15 +173,93 @@ export default function TransactionsPage() {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency: transaction.currency }).format(transaction.amount);
   }
 
+  function summary(transaction: Transaction): TransferTransactionSummary {
+    return {
+      id: transaction.id, transactionDate: transaction.transactionDate, description: transaction.description,
+      amount: transaction.amount, currency: transaction.currency, financialAccountId: transaction.financialAccountId,
+      accountName: transaction.accountName,
+    };
+  }
+
+  function reviewSuggestion(suggestion: TransferSuggestion) {
+    setPendingTransfer({ outgoing: suggestion.outgoing, incoming: suggestion.incoming });
+  }
+
+  function reviewSelectedTransfers() {
+    const selected = selectedTransferIds.map(id => transactions.find(transaction => transaction.id === id)).filter((transaction): transaction is Transaction => Boolean(transaction));
+    const outgoing = selected.find(transaction => transaction.amount < 0);
+    const incoming = selected.find(transaction => transaction.amount > 0);
+    if (!outgoing || !incoming) {
+      setError('Select one negative outgoing transfer and one positive incoming transfer.');
+      return;
+    }
+    setPendingTransfer({ outgoing: summary(outgoing), incoming: summary(incoming) });
+  }
+
+  async function confirmTransferLink() {
+    if (!pendingTransfer) return;
+    setSavingTransfer(true);
+    setError('');
+    try {
+      await api.post('/api/transfers/link', {
+        outgoingTransactionId: pendingTransfer.outgoing.id,
+        incomingTransactionId: pendingTransfer.incoming.id,
+      });
+      setPendingTransfer(null);
+      setSelectedTransferIds([]);
+      setNotice('Transfer linked. Both transactions remain in account history.');
+      await Promise.all([loadTransactions(), loadTransferSuggestions()]);
+    } catch (linkError) {
+      setError(apiErrorMessage(linkError));
+    } finally {
+      setSavingTransfer(false);
+    }
+  }
+
+  async function unlinkTransfer(transaction: Transaction) {
+    if (!window.confirm(`Unlink the transfer between “${transaction.description}” and “${transaction.linkedTransferCounterpart?.description ?? 'its counterpart'}”?`)) return;
+    setError('');
+    try {
+      await api.delete('/api/transfers/' + transaction.id);
+      setNotice('Transfer unlinked. Both transactions were preserved.');
+      await Promise.all([loadTransactions(), loadTransferSuggestions()]);
+    } catch (unlinkError) {
+      setError(apiErrorMessage(unlinkError));
+    }
+  }
+
+  function toggleTransferSelection(transaction: Transaction) {
+    if (selectedTransferIds.includes(transaction.id)) {
+      setSelectedTransferIds(current => current.filter(id => id !== transaction.id));
+      return;
+    }
+    if (selectedTransferIds.length >= 2) {
+      setError('Select only two transactions to link as a transfer.');
+      return;
+    }
+    setError('');
+    setSelectedTransferIds(current => [...current, transaction.id]);
+  }
+
   const totalPages = Math.max(page.totalPages, 1);
   return <>
     <div className="page-heading">
       <div><div className="eyebrow">YOUR ACTIVITY</div><h1>Transactions</h1><p className="text-secondary mb-0">Record and find activity across your accounts.</p></div>
-      <Button variant="dark" onClick={openCreate} disabled={accounts.length === 0}>＋ Add transaction</Button>
+      <div className="d-flex flex-wrap gap-2">
+        <Button variant="outline-primary" onClick={reviewSelectedTransfers} disabled={selectedTransferIds.length !== 2}>Review {selectedTransferIds.length} selected transfers</Button>
+        <Button variant="dark" onClick={openCreate} disabled={accounts.length === 0}>＋ Add transaction</Button>
+      </div>
     </div>
     {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
     {notice && <Alert variant="success" dismissible onClose={() => setNotice('')}>{notice}</Alert>}
     {accounts.length === 0 && !loading && <Alert variant="info">Add an active account before creating transactions.</Alert>}
+    {transferSuggestions.filter(suggestion => !dismissedSuggestions.has(suggestionKey(suggestion))).length > 0 && <div className="content-card p-3 p-md-4 mb-3">
+      <div className="d-flex justify-content-between align-items-start gap-3 mb-3"><div><div className="eyebrow">RECONCILIATION</div><h2 className="h5 mb-1">Possible transfer matches</h2><p className="text-secondary mb-0">Suggestions never link transactions automatically. Review each pair before linking.</p></div><Badge bg="light" text="dark">{transferSuggestions.filter(suggestion => !dismissedSuggestions.has(suggestionKey(suggestion))).length} suggestions</Badge></div>
+      <div className="d-grid gap-2">{transferSuggestions.filter(suggestion => !dismissedSuggestions.has(suggestionKey(suggestion))).map(suggestion => <div key={suggestionKey(suggestion)} className="border rounded p-3 d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3">
+        <div className="flex-grow-1"><strong>{suggestion.outgoing.description}</strong> · {suggestion.outgoing.accountName} <span className="text-secondary">→</span> <strong>{suggestion.incoming.description}</strong> · {suggestion.incoming.accountName}<div className="small text-secondary">{suggestion.matchReason} {new Intl.NumberFormat(undefined, { style: 'currency', currency: suggestion.outgoing.currency }).format(Math.abs(suggestion.outgoing.amount))}</div></div>
+        <div className="d-flex gap-2"><Button size="sm" variant="outline-primary" onClick={() => reviewSuggestion(suggestion)}>Review match</Button><Button size="sm" variant="outline-secondary" onClick={() => setDismissedSuggestions(current => new Set(current).add(suggestionKey(suggestion)))}>Dismiss</Button></div>
+      </div>)}</div>
+    </div>}
     <div className="content-card p-3 p-md-4 mb-3">
       <Form onSubmit={applyFilters}>
         <div className="row g-2 align-items-end">
@@ -167,18 +280,20 @@ export default function TransactionsPage() {
         transactions.length === 0 ? <div className="empty-state"><div className="empty-icon">↔</div><h3>No transactions found</h3><p className="text-secondary">Add a transaction or adjust the filters.</p></div> :
         <Table responsive hover className="align-middle mb-0">
           <thead><tr>
-            <th><Button variant="link" className="p-0 text-decoration-none text-dark fw-semibold" onClick={() => changeSort('date')}>Date {sortBy === 'date' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}</Button></th>
+            <th>Select</th><th><Button variant="link" className="p-0 text-decoration-none text-dark fw-semibold" onClick={() => changeSort('date')}>Date {sortBy === 'date' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}</Button></th>
             <th>Description</th><th>Account</th><th>Category</th>
             <th><Button variant="link" className="p-0 text-decoration-none text-dark fw-semibold" onClick={() => changeSort('amount')}>Amount {sortBy === 'amount' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}</Button></th>
-            <th>Type</th><th className="text-end">Actions</th>
+            <th>Type</th><th>Transfer link</th><th className="text-end">Actions</th>
           </tr></thead>
           <tbody>{transactions.map(transaction => <tr key={transaction.id}>
+            <td>{transaction.transactionType === 'Transfer' && !transaction.linkedTransferTransactionId && transaction.amount !== 0 && <Form.Check aria-label={`Select ${transaction.description} to link as a transfer`} checked={selectedTransferIds.includes(transaction.id)} disabled={!selectedTransferIds.includes(transaction.id) && selectedTransferIds.length >= 2} onChange={() => toggleTransferSelection(transaction)} />}</td>
             <td className="text-nowrap">{transaction.transactionDate}</td>
             <td><strong>{transaction.description}</strong>{transaction.subDescription && <div className="small text-secondary">{transaction.subDescription}</div>}</td>
             <td>{transaction.accountName}</td><td>{transaction.categoryName ?? 'Uncategorized'}</td>
             <td className={transaction.amount < 0 ? 'text-danger text-nowrap' : 'text-success text-nowrap'}>{formatAmount(transaction)}</td>
-            <td><Badge bg={transaction.transactionType === 'Expense' ? 'secondary' : 'success'}>{transaction.transactionType}</Badge></td>
-            <td className="text-end text-nowrap"><Button size="sm" variant="outline-secondary" className="me-2" onClick={() => openEdit(transaction)}>Edit</Button><Button size="sm" variant="outline-danger" onClick={() => void remove(transaction)}>Delete</Button></td>
+            <td><Badge bg={transaction.transactionType === 'Expense' ? 'secondary' : transaction.transactionType === 'Transfer' ? 'info' : 'success'} text={transaction.transactionType === 'Transfer' ? 'dark' : undefined}>{transaction.transactionType}</Badge></td>
+            <td>{transaction.linkedTransferCounterpart ? <Badge bg="success">Linked</Badge> : transaction.transactionType === 'Transfer' ? <Badge bg="light" text="dark">Unlinked</Badge> : <span className="text-secondary">—</span>}</td>
+            <td className="text-end text-nowrap">{transaction.linkedTransferCounterpart ? <><Button size="sm" variant="outline-primary" className="me-2" onClick={() => navigate(`/transactions?focus=${transaction.linkedTransferCounterpart!.id}`)}>View counterpart</Button><Button size="sm" variant="outline-danger" onClick={() => void unlinkTransfer(transaction)}>Unlink</Button></> : <><Button size="sm" variant="outline-secondary" className="me-2" onClick={() => openEdit(transaction)}>Edit</Button><Button size="sm" variant="outline-danger" onClick={() => void remove(transaction)}>Delete</Button></>}</td>
           </tr>)}</tbody>
         </Table>}
       <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 px-2 pt-3">
@@ -205,6 +320,30 @@ export default function TransactionsPage() {
         </Modal.Body>
         <Modal.Footer><Button variant="outline-secondary" onClick={() => setShowForm(false)}>Cancel</Button><Button variant="dark" type="submit" disabled={saving || accounts.length === 0}>{saving ? 'Saving…' : 'Save transaction'}</Button></Modal.Footer>
       </Form>
+    </Modal>
+    <Modal show={pendingTransfer !== null} onHide={() => setPendingTransfer(null)} centered>
+      <Modal.Header closeButton><Modal.Title>Confirm transfer pair</Modal.Title></Modal.Header>
+      <Modal.Body>
+        <p className="text-secondary">Review both existing transactions. Linking does not change their amounts or remove them from either account’s history.</p>
+        {pendingTransfer && <div className="d-grid gap-3">
+          {[pendingTransfer.outgoing, pendingTransfer.incoming].map((item, index) => <div key={item.id} className="border rounded p-3">
+            <Badge bg={index === 0 ? 'secondary' : 'primary'} className="mb-2">{index === 0 ? 'Outgoing' : 'Incoming'}</Badge>
+            <div><strong>{item.description}</strong></div><div>{item.accountName} · {item.transactionDate}</div>
+            <div className={item.amount < 0 ? 'text-danger fw-semibold' : 'text-success fw-semibold'}>{new Intl.NumberFormat(undefined, { style: 'currency', currency: item.currency }).format(item.amount)}</div>
+          </div>)}
+        </div>}
+      </Modal.Body>
+      <Modal.Footer><Button variant="outline-secondary" onClick={() => setPendingTransfer(null)}>Cancel</Button><Button variant="dark" onClick={() => void confirmTransferLink()} disabled={savingTransfer}>{savingTransfer ? 'Linking…' : 'Confirm link'}</Button></Modal.Footer>
+    </Modal>
+    <Modal show={viewingCounterpart !== null} onHide={() => navigate('/transactions')} centered>
+      <Modal.Header closeButton><Modal.Title>Transfer counterpart</Modal.Title></Modal.Header>
+      <Modal.Body>{viewingCounterpart ? <>
+        <Badge bg="info" text="dark" className="mb-2">{viewingCounterpart.transactionType}</Badge>
+        <h3 className="h5">{viewingCounterpart.description}</h3>
+        <div>{viewingCounterpart.accountName} · {viewingCounterpart.transactionDate}</div>
+        <div className={viewingCounterpart.amount < 0 ? 'text-danger fw-semibold' : 'text-success fw-semibold'}>{formatAmount(viewingCounterpart)}</div>
+      </> : <div className="text-secondary">Loading transaction…</div>}</Modal.Body>
+      <Modal.Footer><Button variant="outline-secondary" onClick={() => navigate('/transactions')}>Close</Button></Modal.Footer>
     </Modal>
   </>;
 }
