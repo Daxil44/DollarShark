@@ -90,7 +90,9 @@ export default function StatementsPage() {
       .then(response => {
         if (!active) return;
         setAccounts(response.data);
-        setSelectedAccount(response.data[0]?.id ?? '');
+        const firstAccount = response.data[0];
+        setSelectedAccount(firstAccount?.id ?? '');
+        setStatementType(firstAccount?.accountType === 'Credit Card' ? 'CreditCard' : 'Bank');
       })
       .catch(loadError => { if (active) setError(apiErrorMessage(loadError)); })
       .finally(() => { if (active) setLoadingAccounts(false); });
@@ -178,7 +180,7 @@ export default function StatementsPage() {
         selected: false,
         transactionType: account?.accountType === 'Investment' ? '' : statement.statementType === 'Bank' ? (candidate.amount !== null && candidate.amount > 0 ? 'Income' : candidate.amount !== null && candidate.amount < 0 ? 'Expense' : '') : (candidate.amount !== null && candidate.amount > 0 ? 'Expense' : ''),
         categoryId: null,
-        duplicateDecision: candidate.duplicateCheck?.classification === 'LikelyDuplicate' || candidate.duplicateCheck?.classification === 'PossibleDuplicate' ? 'Unresolved' as const : null
+        duplicateDecision: candidate.duplicateCheck?.classification === 'LikelyDuplicate' ? 'Skip' as const : candidate.duplicateCheck?.classification === 'PossibleDuplicate' ? 'Unresolved' as const : null
       }));
       setCsvPreview({ statement, result: response.data, rows });
     } catch (parseError) {
@@ -278,14 +280,22 @@ export default function StatementsPage() {
           if (!rejected?.duplicateCheck) return row;
           const check: DuplicateCheck = rejected.duplicateCheck;
           const match = check.classification === 'LikelyDuplicate' || check.classification === 'PossibleDuplicate';
-          return { ...row, duplicateCheck: check, duplicateDecision: match ? 'Unresolved' : null, selected: false };
+          return { ...row, duplicateCheck: check, duplicateDecision: check.classification === 'LikelyDuplicate' ? 'Skip' : match ? 'Unresolved' : null, selected: false };
         }) }) : current);
       }
       setError(apiErrorMessage(importError));
     } finally { setConfirming(false); }
   }
 
-  const canUpload = !loadingAccounts && accounts.length > 0 && !!selectedAccount && !!file;
+  const selectedUploadAccount = accounts.find(account => account.id === selectedAccount);
+  const statementTypeMatchesAccount = !!selectedUploadAccount &&
+    ((selectedUploadAccount.accountType === 'Credit Card') === (statementType === 'CreditCard'));
+  const statementTypeValidation = selectedUploadAccount && !statementTypeMatchesAccount
+    ? selectedUploadAccount.accountType === 'Credit Card'
+      ? 'Credit Card accounts require a Credit Card statement.'
+      : 'Bank statements must use a non-Credit Card account.'
+    : '';
+  const canUpload = !loadingAccounts && accounts.length > 0 && !!selectedAccount && !!file && statementTypeMatchesAccount;
   const visibleStatements = statements.items.filter(statement => {
     const account = accounts.find(item => item.id === statement.financialAccountId);
     const search = historySearch.trim().toLowerCase();
@@ -309,10 +319,15 @@ export default function StatementsPage() {
         <Alert variant="info" className="mb-0">Create a financial account before uploading a statement. <Link to="/accounts">Go to accounts</Link>.</Alert> :
         <Form onSubmit={event => void upload(event)}>
           <div className="row g-3 align-items-end">
-            <Form.Group className="col-md-4"><Form.Label>Statement type</Form.Label><Form.Select required value={statementType} onChange={event => setStatementType(event.target.value as 'Bank' | 'CreditCard')}><option value="Bank">Bank statement</option><option value="CreditCard">Credit card statement</option></Form.Select></Form.Group>
-            <Form.Group className="col-md-4"><Form.Label>Financial account</Form.Label><Form.Select required value={selectedAccount} onChange={event => setSelectedAccount(event.target.value)}>
+            <Form.Group className="col-md-4"><Form.Label>Statement type</Form.Label><Form.Select required isInvalid={!!statementTypeValidation} value={statementType} onChange={event => setStatementType(event.target.value as 'Bank' | 'CreditCard')}><option value="Bank">Bank statement</option><option value="CreditCard">Credit card statement</option></Form.Select>{statementTypeValidation && <Form.Control.Feedback type="invalid">{statementTypeValidation}</Form.Control.Feedback>}</Form.Group>
+            <Form.Group className="col-md-4"><Form.Label>Financial account</Form.Label><Form.Select required isInvalid={!!statementTypeValidation} value={selectedAccount} onChange={event => {
+              const nextAccountId = event.target.value;
+              const nextAccount = accounts.find(account => account.id === nextAccountId);
+              setSelectedAccount(nextAccountId);
+              setStatementType(nextAccount?.accountType === 'Credit Card' ? 'CreditCard' : 'Bank');
+            }}>
               {accounts.map(account => <option key={account.id} value={account.id}>{account.name} · {account.institution}</option>)}
-            </Form.Select></Form.Group>
+            </Form.Select>{statementTypeValidation && <Form.Control.Feedback type="invalid">{statementTypeValidation}</Form.Control.Feedback>}</Form.Group>
             <div className="col-md-4">
               <Form.Label htmlFor="statement-file">CSV file</Form.Label>
               <div className={`border rounded-3 p-3 text-center ${draggingFile ? 'border-primary bg-light' : 'bg-body-tertiary'}`} onDragOver={event => { event.preventDefault(); setDraggingFile(true); }} onDragLeave={() => setDraggingFile(false)} onDrop={event => { event.preventDefault(); setDraggingFile(false); chooseFile(event.dataTransfer.files[0]); }}>
