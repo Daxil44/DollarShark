@@ -117,6 +117,24 @@ public sealed class StatementIntegrationTests
     }
 
     [Fact]
+    public async Task UploadRequiresStatementTypeToMatchAccountType()
+    {
+        await using var factory = new StatementApiFactory();
+        using var bankClient = factory.CreateClient();
+        using var cardClient = factory.CreateClient();
+        var (bankCsrf, bankAccountId) = await RegisterAndCreateAccount(bankClient, "statement-type-bank@example.test");
+        var (cardCsrf, cardAccountId) = await RegisterAndCreateAccount(cardClient, "statement-type-card@example.test", "Credit Card");
+        var csv = Encoding.UTF8.GetBytes("Date,Description,Amount\n2026-10-20,Purchase,-4.25\n");
+
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await Upload(bankClient, bankAccountId, "wrong-credit-card.csv", csv, bankCsrf, statementType: "CreditCard")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await Upload(cardClient, cardAccountId, "wrong-bank.csv", csv, cardCsrf, statementType: "Bank")).StatusCode);
+        Assert.Equal(HttpStatusCode.Created,
+            (await Upload(cardClient, cardAccountId, "matching-credit-card.csv", csv, cardCsrf, statementType: "CreditCard")).StatusCode);
+    }
+
+    [Fact]
     public async Task UploadRequiresCsrfAndSupportsPaginatedStatementHistory()
     {
         await using var factory = new StatementApiFactory();
@@ -287,7 +305,7 @@ public sealed class StatementIntegrationTests
     {
         await using var factory = new StatementApiFactory();
         using var client = factory.CreateClient();
-        var (csrf, accountId) = await RegisterAndCreateAccount(client, "credit-card-signs@example.test");
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "credit-card-signs@example.test", "Credit Card");
         var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
         var csv = Encoding.UTF8.GetBytes($"Date,Description,Amount\n{today},Purchase,42.50\n{today},Refund,-10.00\n{today},Card payment,-100.00\n");
         var upload = await Upload(client, accountId, "card.csv", csv, csrf, statementType: "CreditCard");
@@ -313,7 +331,7 @@ public sealed class StatementIntegrationTests
     {
         await using var factory = new StatementApiFactory();
         using var client = factory.CreateClient();
-        var (csrf, accountId) = await RegisterAndCreateAccount(client, "credit-card-duplicate@example.test");
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "credit-card-duplicate@example.test", "Credit Card");
         var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
         var existing = await PostJson(client, "/api/transactions", new { transactionDate = today, description = "Card purchase", amount = -42.50m, transactionType = "Expense", financialAccountId = accountId, categoryId = (Guid?)null, externalReference = (string?)null }, csrf);
         Assert.Equal(HttpStatusCode.Created, existing.StatusCode);
@@ -554,7 +572,7 @@ public sealed class StatementIntegrationTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/statements/{statement.Id}")).StatusCode);
     }
 
-    private static async Task<(string Csrf, Guid AccountId)> RegisterAndCreateAccount(HttpClient client, string email)
+    private static async Task<(string Csrf, Guid AccountId)> RegisterAndCreateAccount(HttpClient client, string email, string accountType = "Chequing")
     {
         var csrf = await GetCsrf(client);
         var registration = await PostJson(client, "/api/auth/register", new { email, password = Password }, csrf);
@@ -562,9 +580,9 @@ public sealed class StatementIntegrationTests
         csrf = await GetCsrf(client);
         var account = await PostJson(client, "/api/accounts", new
         {
-            name = "Checking",
-            institution = "Test Bank",
-            accountType = "Chequing",
+            name = accountType == "Credit Card" ? "Test Credit Card" : "Checking",
+            institution = accountType == "Credit Card" ? "Test Card" : "Test Bank",
+            accountType,
             currency = "CAD",
             lastFourDigits = ""
         }, csrf);

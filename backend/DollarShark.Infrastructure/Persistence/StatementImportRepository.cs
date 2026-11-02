@@ -11,6 +11,10 @@ public sealed class StatementImportRepository(FinanceDbContext db) : IStatementI
         db.FinancialAccounts.AsNoTracking().Where(x => x.Id == accountId && x.UserId == userId)
             .Select(x => x.Name).SingleOrDefaultAsync(cancellationToken);
 
+    public Task<string?> GetAccountTypeForUserAsync(Guid accountId, string userId, CancellationToken cancellationToken) =>
+        db.FinancialAccounts.AsNoTracking().Where(x => x.Id == accountId && x.UserId == userId)
+            .Select(x => x.AccountType).SingleOrDefaultAsync(cancellationToken);
+
     public async Task AddAsync(StatementImport statement, CancellationToken cancellationToken) =>
         await db.StatementImports.AddAsync(statement, cancellationToken);
 

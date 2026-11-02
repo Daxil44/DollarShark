@@ -81,6 +81,7 @@ public interface IStatementCsvParser
 public interface IStatementImportRepository
 {
     Task<string?> GetAccountNameForUserAsync(Guid accountId, string userId, CancellationToken cancellationToken);
+    Task<string?> GetAccountTypeForUserAsync(Guid accountId, string userId, CancellationToken cancellationToken);
     Task AddAsync(StatementImport statement, CancellationToken cancellationToken);
     Task<IReadOnlyList<StatementImportDto>> ListAsync(string userId, int page, int pageSize, CancellationToken cancellationToken);
     Task<int> CountAsync(string userId, CancellationToken cancellationToken);
@@ -135,6 +136,14 @@ public sealed class StatementImportService(
         var accountName = await repository.GetAccountNameForUserAsync(command.FinancialAccountId, userId, cancellationToken);
         if (accountName is null)
             return UseCaseResult<StatementImportDto>.NotFound("Financial account was not found.");
+        var accountType = await repository.GetAccountTypeForUserAsync(command.FinancialAccountId, userId, cancellationToken);
+        var isCreditCardAccount = string.Equals(accountType, "Credit Card", StringComparison.Ordinal);
+        var isCreditCardStatement = command.StatementType == "CreditCard";
+        if (isCreditCardAccount != isCreditCardStatement)
+            return UseCaseResult<StatementImportDto>.Invalid(Error("statementType",
+                isCreditCardAccount
+                    ? "Credit Card accounts require a Credit Card statement."
+                    : "Bank statements must use a non-Credit Card account."));
         if (command.FileSizeBytes <= 0)
             return UseCaseResult<StatementImportDto>.Invalid(Error("file", "Choose a non-empty statement file."));
         if (command.FileSizeBytes > options.MaxFileSizeBytes)
