@@ -184,6 +184,9 @@ public sealed class DashboardAccountIntegrationTests
         Assert.Null(cadBalances.CashBalance);
         Assert.Equal(3, cadBalances.CashAccountCount);
         Assert.Equal(2, cadBalances.CashAccountsWithBalances);
+        Assert.Equal(1610m, cadBalances.ChequingBalance);
+        Assert.Null(cadBalances.SavingsBalance);
+        Assert.Equal(2, cadBalances.SavingsAccountCount);
         Assert.Equal(260m, cadBalances.CreditCardLiabilities);
         Assert.Equal(300m, cadBalances.RecordedInvestmentBalances);
         var usdBalances = Assert.Single(result.Value.BalanceTotals, x => x.Currency == "USD");
@@ -197,6 +200,7 @@ public sealed class DashboardAccountIntegrationTests
         Assert.Equal(90m, cashFlow.TransfersToOtherAccounts);
         Assert.Equal(100m, cashFlow.InvestmentContributions);
         Assert.Equal(610m, cashFlow.RemainingAfterExpensesAndTransfers);
+        Assert.Equal(80m, cashFlow.SavingsRatePercent);
         Assert.Equal(cashFlow.Income, cashFlow.Expenses + cashFlow.TransfersToOtherAccounts + cashFlow.InvestmentContributions + cashFlow.RemainingAfterExpensesAndTransfers);
 
         var accountOverview = await dashboard.GetOverviewAsync(new DashboardQuery { AccountId = chequing.Id, From = date, To = date }, Ct);
@@ -208,6 +212,48 @@ public sealed class DashboardAccountIntegrationTests
         var listedChequing = Assert.Single((await accounts.ListAsync(false, Ct)).Value!, x => x.Id == chequing.Id);
         Assert.Equal(listedChequing.CalculatedBalance, Assert.Single(result.Value.AccountBalanceTrends, x => x.AccountId == chequing.Id).Points[^1].Balance);
         Assert.DoesNotContain(result.Value.AccountBalanceTrends, x => x.AccountId == unconfiguredSavings.Id);
+    }
+
+    [Fact]
+    public async Task MonthlyFinancialInsightsKeepCurrenciesSeparateAndHandleRefundsAndZeroIncome()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        var currentUser = new TestCurrentUser();
+        var finance = new FinanceRepository(db.Context, currentUser);
+        var accounts = new AccountService(finance);
+        var transactions = new TransactionService(finance);
+        var cad = (await accounts.CreateAsync(new AccountRequest("CAD", "Bank", "Chequing", "CAD", null), Ct)).Value!;
+        var usd = (await accounts.CreateAsync(new AccountRequest("USD", "Bank", "Chequing", "USD", null), Ct)).Value!;
+        var food = new Category { Name = "Food", IsSystem = true };
+        var travel = new Category { Name = "Travel", IsSystem = true };
+        db.Context.Categories.AddRange(food, travel);
+        await db.Context.SaveChangesAsync(Ct);
+
+        async Task Add(Guid accountId, DateOnly date, string description, decimal amount, string type, Guid? categoryId = null) =>
+            _ = await transactions.CreateAsync(new TransactionRequest(date, description, amount, type, accountId, categoryId), Ct);
+        await Add(cad.Id, new DateOnly(2026, 9, 2), "September salary", 2000m, "Income");
+        await Add(cad.Id, new DateOnly(2026, 9, 3), "Food purchase", -200m, "Expense", food.Id);
+        await Add(cad.Id, new DateOnly(2026, 9, 4), "Travel purchase", -50m, "Expense", travel.Id);
+        await Add(cad.Id, new DateOnly(2026, 9, 5), "Refund", 20m, "Refund");
+        await Add(cad.Id, new DateOnly(2026, 10, 2), "Food purchase", -300m, "Expense", food.Id);
+        await Add(usd.Id, new DateOnly(2026, 10, 2), "USD expense", -10m, "Expense");
+        await Add(cad.Id, new DateOnly(2026, 10, 3), "Transfer out", -75m, "Transfer");
+
+        var dashboard = new DashboardService(new DashboardRepository(db.Context, currentUser), accounts);
+        var result = await dashboard.GetOverviewAsync(new DashboardQuery
+        {
+            From = new DateOnly(2026, 9, 1), To = new DateOnly(2026, 10, 31)
+        }, Ct);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value!.Currencies.Count);
+        Assert.Equal(2020m, Assert.Single(result.Value.MonthlyCashFlow, x => x.Currency == "CAD" && x.Month == "2026-09").Income);
+        Assert.Equal((2020m - 250m) / 2020m * 100m,
+            Assert.Single(result.Value.MonthlyCashFlow, x => x.Currency == "CAD" && x.Month == "2026-09").SavingsRatePercent);
+        Assert.Null(Assert.Single(result.Value.MonthlyCashFlow, x => x.Currency == "USD").SavingsRatePercent);
+        Assert.Equal(300m, Assert.Single(result.Value.MonthlyCategoryExpenses, x => x.Currency == "CAD" && x.Month == "2026-10" && x.CategoryName == "Food").Amount);
+        Assert.Equal(50m, Assert.Single(result.Value.MonthlyCategoryExpenses, x => x.Currency == "CAD" && x.Month == "2026-09" && x.CategoryName == "Travel").Amount);
+        Assert.Equal(-300m, result.Value.LargestExpenses.First(x => x.Currency == "CAD").Amount);
+        Assert.DoesNotContain(result.Value.LargestExpenses, x => x.TransactionType == "Transfer");
     }
 
     [Fact]

@@ -226,6 +226,12 @@ export type DashboardBalanceTotals = {
   recordedInvestmentBalances: number | null;
   investmentAccountCount: number;
   investmentsWithBalances: number;
+  chequingBalance: number | null;
+  chequingAccountCount: number;
+  chequingAccountsWithBalances: number;
+  savingsBalance: number | null;
+  savingsAccountCount: number;
+  savingsAccountsWithBalances: number;
 };
 
 export type DashboardMonthlyCashFlow = {
@@ -238,6 +244,14 @@ export type DashboardMonthlyCashFlow = {
   transfersToOtherAccounts: number;
   investmentContributions: number;
   remainingAfterExpensesAndTransfers: number;
+  savingsRatePercent: number | null;
+};
+
+export type DashboardMonthlyCategoryExpense = {
+  currency: string;
+  month: string;
+  categoryName: string;
+  amount: number;
 };
 
 export type DashboardAccountBalanceTrend = {
@@ -296,4 +310,6 @@ export type DashboardOverview = {
   balanceTotals: DashboardBalanceTotals[];
   monthlyCashFlow: DashboardMonthlyCashFlow[];
   accountBalanceTrends: DashboardAccountBalanceTrend[];
+  monthlyCategoryExpenses: DashboardMonthlyCategoryExpense[];
+  largestExpenses: DashboardRecentTransaction[];
 };
