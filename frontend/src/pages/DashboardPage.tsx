@@ -129,7 +129,8 @@ export default function DashboardPage() {
     try {
       const response = await api.get<DashboardOverview>('/api/dashboard/overview', { params: { from: period.from, to: period.to, recentLimit, ...(selectedAccountId ? { accountId: selectedAccountId } : {}) } });
       if (!Array.isArray(response.data.accounts) || !Array.isArray(response.data.balanceTotals) ||
-          !Array.isArray(response.data.monthlyCashFlow) || !Array.isArray(response.data.accountBalanceTrends)) {
+          !Array.isArray(response.data.monthlyCashFlow) || !Array.isArray(response.data.accountBalanceTrends) ||
+          !Array.isArray(response.data.monthlyCategoryExpenses) || !Array.isArray(response.data.largestExpenses)) {
         setOverview(null);
         setError('The API is running an older build without consolidated dashboards. Restart the DollarShark API, then refresh this page.');
         return;
@@ -206,7 +207,50 @@ export default function DashboardPage() {
   const categoryData = useMemo(() => overview?.categoryExpenses.filter(item => item.currency === currency) ?? [], [overview, currency]);
   const monthlyData = useMemo(() => overview?.monthlyTotals.filter(item => item.currency === currency).map(item => ({ ...item, label: monthLabel(item.month) })) ?? [], [overview, currency]);
   const monthlyCashFlowData = useMemo(() => overview?.monthlyCashFlow.filter(item => item.currency === currency).map(item => ({ ...item, label: monthLabel(item.month) })) ?? [], [overview, currency]);
+  const monthlyInsightRows = useMemo(() => monthlyCashFlowData.slice(-6), [monthlyCashFlowData]);
+  const monthlyCategoryData = useMemo(() => overview?.monthlyCategoryExpenses.filter(item => item.currency === currency) ?? [], [overview, currency]);
+  const categoryChanges = useMemo(() => {
+    const months = [...new Set([...monthlyCategoryData.map(item => item.month), ...monthlyCashFlowData.map(item => item.month)])].sort();
+    if (months.length < 2) return [];
+    const previousMonth = months[months.length - 2];
+    const currentMonth = months[months.length - 1];
+    const previous = new Map(monthlyCategoryData.filter(item => item.month === previousMonth).map(item => [item.categoryName, item.amount]));
+    const current = new Map(monthlyCategoryData.filter(item => item.month === currentMonth).map(item => [item.categoryName, item.amount]));
+    return [...new Set([...previous.keys(), ...current.keys()])]
+      .map(categoryName => ({ categoryName, previous: previous.get(categoryName) ?? 0, current: current.get(categoryName) ?? 0 }))
+      .map(item => ({ ...item, change: item.current - item.previous }))
+      .sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 4)
+      .map(item => ({ ...item, previousMonth, currentMonth }));
+  }, [monthlyCategoryData, monthlyCashFlowData]);
+  const largestExpenses = useMemo(() => overview?.largestExpenses.filter(item => item.currency === currency) ?? [], [overview, currency]);
   const accountBalanceTrends = useMemo(() => overview?.accountBalanceTrends.filter(item => item.currency === currency) ?? [], [overview, currency]);
+  const cashBalanceHistory = useMemo(() => {
+    if (!overview) return [];
+    const cashAccounts = overview.accounts.filter(account => account.currency === currency && ['Chequing', 'Savings'].includes(account.accountType));
+    if (!cashAccounts.length || cashAccounts.some(account => account.openingBalance === null || account.openingBalanceDate === null)) return [];
+    const trends = cashAccounts.map(account => overview.accountBalanceTrends.find(item => item.accountId === account.id));
+    if (trends.some(item => !item)) return [];
+    const points = trends as NonNullable<(typeof trends)[number]>[];
+    const dates = [...new Set(points.flatMap(item => item.points.map(point => point.date)))].sort();
+    return dates.flatMap(date => {
+      const balances = cashAccounts.map((account, index) => {
+        if (date < account.openingBalanceDate!) return null;
+        const eligiblePoints = points[index].points.filter(item => item.date <= date);
+        const point = eligiblePoints[eligiblePoints.length - 1];
+        return point ? { type: account.accountType, balance: point.balance } : null;
+      });
+      if (balances.some(item => item === null)) return [];
+      const entries = balances as { type: string; balance: number }[];
+      const chequing = entries.filter(item => item.type === 'Chequing').reduce((total, item) => total + item.balance, 0);
+      const savings = entries.filter(item => item.type === 'Savings').reduce((total, item) => total + item.balance, 0);
+      return [{ date, label: displayDate(date), chequing, savings, total: chequing + savings }];
+    });
+  }, [overview, currency]);
+  const currencySummary = overview?.currencies.find(item => item.currency === currency);
+  const savingsRateFor = (income: number | undefined, netCashFlow: number | undefined) =>
+    income === undefined || netCashFlow === undefined || income === 0 ? null : netCashFlow / income * 100;
+  const selectedPeriodSavingsRate = savingsRateFor(currencySummary?.income, currencySummary?.netCashFlow);
+  const previousPeriodSavingsRate = savingsRateFor(currencySummary?.previousIncome, currencySummary?.previousNetCashFlow);
   const hasTransactions = (overview?.currencies.some(item => item.transactionCount > 0) ?? false) || (overview?.recentTransactions.length ?? 0) > 0;
   const selectedAccount = accounts.find(account => account.id === selectedAccountId) ?? null;
   const accountType = selectedAccount?.accountType ?? '';
@@ -264,6 +308,34 @@ export default function DashboardPage() {
           const groupAccounts = overview.accounts.filter(account => account.accountType === group.type);
           return <div className="col-12 col-md-6 col-xl-3" key={group.type}><Card className="stat-card h-100"><Card.Body><h3 className="section-title h6">{group.label}</h3>{groupAccounts.length === 0 ? <p className="small text-secondary mb-0">No active accounts.</p> : <div className="d-flex flex-column gap-3">{groupAccounts.map(account => <div className="border-top pt-3" key={account.id}><div className="d-flex justify-content-between align-items-start gap-2"><div><strong>{account.name}</strong><div className="small text-secondary">{account.institution} · {account.currency}</div></div><Badge bg={account.classification === 'Liability' ? 'warning' : 'success'} text={account.classification === 'Liability' ? 'dark' : undefined}>{account.classification}</Badge></div><div className="mt-2"><div className="small text-secondary">{account.accountType === 'Credit Card' ? 'Outstanding liability' : account.accountType === 'Investment' ? 'Recorded account value' : 'Current cash balance'}</div><strong>{account.calculatedBalance === null ? 'Not available' : money(account.calculatedBalance, account.currency)}</strong>{account.calculatedBalance === null && <div className="small text-secondary">Opening balance not configured.</div>}</div><Button size="sm" variant="outline-dark" className="mt-2" onClick={() => setSelectedAccountId(account.id)}>View account dashboard</Button></div>)}</div>}</Card.Body></Card></div>;
         })}</div>}
+      </div>}
+
+      {!selectedAccount && <div className="content-card p-3 p-md-4 mb-4">
+        <div className="mb-3"><h2 className="section-title">Monthly financial insights</h2><p className="small text-secondary mb-0">Savings rate is net cash flow divided by income. It is a cash-flow measure, not a confirmed savings-account deposit. Months follow the selected date range and may be partial.</p></div>
+        <div className="row g-3">
+          <div className="col-12 col-xl-7"><Card className="stat-card h-100"><Card.Body>
+            <h3 className="section-title h6">Savings rate by month</h3>
+            <p className="small text-secondary">Selected period: {selectedPeriodSavingsRate === null ? '—' : `${selectedPeriodSavingsRate.toFixed(1)}%`} · Previous period: {previousPeriodSavingsRate === null ? '—' : `${previousPeriodSavingsRate.toFixed(1)}%`}</p>
+            {monthlyInsightRows.length === 0 ? <div className="chart-empty">No monthly income or expense data for this period.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><LineChart data={monthlyInsightRows}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis unit="%" tickLine={false} axisLine={false} /><Tooltip formatter={(value, name) => [value === null ? 'Not available (zero income)' : `${Number(value).toFixed(1)}%`, name]} /><Line type="monotone" dataKey="savingsRatePercent" name="Savings rate" connectNulls={false} stroke="#17845f" strokeWidth={2.5} dot={{ r: 4 }} /></LineChart></ResponsiveContainer></div>}
+            <div className="table-responsive mt-3"><Table size="sm" className="align-middle mb-0"><thead><tr><th>Month</th><th className="text-end">Income</th><th className="text-end">Expenses</th><th className="text-end">Transfers out</th><th className="text-end">Investment</th><th className="text-end">Cash retained*</th><th className="text-end">Net flow</th><th className="text-end">Savings rate</th></tr></thead><tbody>{monthlyInsightRows.map(item => <tr key={item.month}><td>{item.label}</td><td className="text-end">{money(item.income, currency)}</td><td className="text-end">{money(item.expenses, currency)}</td><td className="text-end">{money(item.outgoingTransfers, currency)}</td><td className="text-end">{money(item.investmentContributions, currency)}</td><td className="text-end">{money(item.remainingAfterExpensesAndTransfers, currency)}</td><td className="text-end">{money(item.netCashFlow, currency)}</td><td className="text-end">{item.savingsRatePercent === null ? '—' : `${item.savingsRatePercent.toFixed(1)}%`}</td></tr>)}</tbody></Table></div>
+            <p className="small text-secondary mt-2 mb-0">*Cash retained is income minus expenses and outgoing transfers; it is not a savings-account balance.</p>
+          </Card.Body></Card></div>
+          <div className="col-12 col-xl-5"><Card className="stat-card h-100"><Card.Body>
+            <h3 className="section-title h6">Spending changes</h3>
+            {categoryChanges.length === 0 ? <p className="small text-secondary">Category comparisons need expense activity in at least two months.</p> : <>
+              <p className="small text-secondary">{monthLabel(categoryChanges[0].previousMonth)} compared with {monthLabel(categoryChanges[0].currentMonth)}</p>
+              <div className="d-flex flex-column gap-2">{categoryChanges.map(item => <div className="d-flex justify-content-between gap-3 border-bottom pb-2" key={item.categoryName}><span className="text-truncate">{item.categoryName}</span><span className={item.change > 0 ? 'text-danger text-nowrap' : 'text-success text-nowrap'}>{item.change > 0 ? '+' : ''}{money(item.change, currency)}</span></div>)}</div>
+            </>}
+            <h3 className="section-title h6 mt-4">Largest expenses</h3>
+            {largestExpenses.length === 0 ? <p className="small text-secondary mb-0">No ordinary expenses in this period.</p> : <div className="d-flex flex-column gap-2">{largestExpenses.map(item => <div className="d-flex justify-content-between gap-3 border-bottom pb-2" key={item.id}><div className="text-truncate"><strong>{item.description}</strong><div className="small text-secondary">{displayDate(item.transactionDate)} · {item.categoryName ?? 'Uncategorized'}</div></div><strong className="text-danger text-nowrap">{money(item.amount, item.currency)}</strong></div>)}</div>}
+          </Card.Body></Card></div>
+        </div>
+      </div>}
+
+      {!selectedAccount && <div className="content-card p-3 p-md-4 mb-4">
+        <div className="mb-3"><h2 className="section-title">Cash position</h2><p className="small text-secondary mb-0">Chequing and savings balances are actual account balances from opening balances and recorded movements. Incomplete totals are not estimated.</p></div>
+        <div className="table-responsive mb-4"><Table className="align-middle mb-0"><thead><tr><th>Currency</th><th className="text-end">Chequing</th><th className="text-end">Savings</th><th className="text-end">Combined cash</th></tr></thead><tbody>{overview.balanceTotals.map(item => <tr key={item.currency}><th>{item.currency}</th><td className="text-end">{item.chequingAccountCount === 0 ? money(0, item.currency) : item.chequingBalance === null ? 'Incomplete' : money(item.chequingBalance, item.currency)}</td><td className="text-end">{item.savingsAccountCount === 0 ? money(0, item.currency) : item.savingsBalance === null ? 'Incomplete' : money(item.savingsBalance, item.currency)}</td><td className="text-end fw-semibold">{item.cashAccountCount === 0 ? money(0, item.currency) : item.cashBalance === null ? 'Incomplete' : money(item.cashBalance, item.currency)}</td></tr>)}</tbody></Table></div>
+        {cashBalanceHistory.length === 0 ? <div className="chart-empty">Cash balance history needs opening balances and dates for every active chequing and savings account in {currency || 'the selected currency'}.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><LineChart data={cashBalanceHistory}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} /><YAxis tickLine={false} axisLine={false} tickFormatter={value => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value))} /><Tooltip formatter={(value, name) => [money(Number(value), currency), name]} /><Legend /><Line type="monotone" dataKey="chequing" name="Chequing cash" stroke="#3176a5" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="savings" name="Savings cash" stroke="#7858a6" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="total" name="Combined cash" stroke="#17845f" strokeWidth={3} dot={false} /></LineChart></ResponsiveContainer></div>}
       </div>}
 
       {selectedAccount && <div className="content-card p-3 p-md-4 mb-4">

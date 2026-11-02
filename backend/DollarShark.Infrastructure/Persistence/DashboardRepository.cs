@@ -225,7 +225,60 @@ public sealed class DashboardRepository(FinanceDbContext db, ICurrentUserContext
         return grouped.Select(x => new DashboardMonthlyCashFlow(x.Currency, $"{x.Year:D4}-{x.Month:D2}",
             x.Income, x.Expenses, x.Income - x.Expenses, x.OutgoingTransfers,
             x.OutgoingTransfers - x.InvestmentContributions, x.InvestmentContributions,
-            x.Income - x.Expenses - x.OutgoingTransfers)).ToArray();
+            x.Income - x.Expenses - x.OutgoingTransfers,
+            x.Income == 0m ? null : (x.Income - x.Expenses) / x.Income * 100m)).ToArray();
+    }
+
+    public async Task<IReadOnlyList<DashboardMonthlyCategoryExpense>> GetMonthlyCategoryExpensesAsync(
+        DateOnly from, DateOnly to, CancellationToken cancellationToken, Guid? accountId = null)
+    {
+        var userId = UserId;
+        var transactions = db.Transactions.AsNoTracking()
+            .Where(x => x.UserId == userId && x.TransactionDate >= from && x.TransactionDate <= to &&
+                        x.TransactionType != TransactionType.Transfer && x.Amount < 0)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(x => x.FinancialAccountId == id);
+        var grouped = await transactions
+            .GroupBy(x => new { x.TransactionDate.Year, x.TransactionDate.Month, x.Currency, x.CategoryId })
+            .Select(group => new
+            {
+                group.Key.Year,
+                group.Key.Month,
+                group.Key.Currency,
+                group.Key.CategoryId,
+                Amount = -group.Sum(x => x.Amount)
+            })
+            .ToListAsync(cancellationToken);
+        var categoryIds = grouped.Where(x => x.CategoryId.HasValue).Select(x => x.CategoryId!.Value).Distinct().ToArray();
+        var categoryNames = categoryIds.Length == 0
+            ? new Dictionary<Guid, string>()
+            : await db.Categories.AsNoTracking()
+                .Where(x => categoryIds.Contains(x.Id) && (x.IsSystem || x.UserId == userId))
+                .ToDictionaryAsync(x => x.Id, x => x.Name, cancellationToken);
+        return grouped.Select(x => new DashboardMonthlyCategoryExpense(x.Currency, $"{x.Year:D4}-{x.Month:D2}",
+                x.CategoryId.HasValue && categoryNames.TryGetValue(x.CategoryId.Value, out var name) ? name : "Uncategorized", x.Amount))
+            .OrderBy(x => x.Month, StringComparer.Ordinal).ThenByDescending(x => x.Amount).ThenBy(x => x.CategoryName)
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<DashboardRecentTransaction>> GetLargestExpensesAsync(
+        DateOnly from, DateOnly to, int limit, CancellationToken cancellationToken, Guid? accountId = null)
+    {
+        var userId = UserId;
+        var transactions = db.Transactions.AsNoTracking()
+            .Where(x => x.UserId == userId && x.TransactionDate >= from && x.TransactionDate <= to &&
+                        x.TransactionType == TransactionType.Expense && x.Amount < 0)
+            .AsQueryable();
+        if (accountId is Guid id) transactions = transactions.Where(x => x.FinancialAccountId == id);
+        return await transactions
+            .Where(candidate => transactions.Count(other => other.Currency == candidate.Currency &&
+                (other.Amount < candidate.Amount ||
+                 (other.Amount == candidate.Amount && other.TransactionDate > candidate.TransactionDate) ||
+                 (other.Amount == candidate.Amount && other.TransactionDate == candidate.TransactionDate && other.Id < candidate.Id))) < limit)
+            .OrderBy(x => x.Currency).ThenBy(x => x.Amount).ThenByDescending(x => x.TransactionDate).ThenBy(x => x.Id)
+            .Select(x => new DashboardRecentTransaction(x.Id, x.TransactionDate, x.Description, x.Amount, x.Currency,
+                x.TransactionType.ToString(), x.FinancialAccount.Name, x.Category == null ? null : x.Category.Name))
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<DashboardMonthlyActivity>> GetMonthlyActivityAsync(
