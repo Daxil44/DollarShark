@@ -10,6 +10,7 @@ import TransactionsPage from './pages/TransactionsPage';
 import StatementsPage from './pages/StatementsPage';
 import DashboardPage from './pages/DashboardPage';
 import LandingPage from './pages/LandingPage';
+import { ConfirmEmailPage, ForgotPasswordPage, ResetPasswordPage } from './pages/AccountEmailPages';
 import DollarSharkLogo from './components/DollarSharkLogo';
 import './App.css';
 
@@ -77,6 +78,9 @@ export default function App() {
     <Route path="/" element={<HomeRoute />} />
     <Route path="/login" element={<AuthPage mode="login" />} />
     <Route path="/register" element={<AuthPage mode="register" />} />
+    <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+    <Route path="/reset-password" element={<ResetPasswordPage />} />
+    <Route path="/confirm-email" element={<ConfirmEmailPage />} />
     <Route path="*" element={<ProtectedApp />} />
   </Routes>;
 }

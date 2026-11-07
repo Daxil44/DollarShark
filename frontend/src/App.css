@@ -90,3 +90,15 @@ footer span { padding: 0 .3rem; }
 .stat-delta { font-weight: 700; }
 .insight-table th { font-size: .78rem; color: #6c817b; font-weight: 700; white-space: nowrap; }
 .insight-table td { white-space: nowrap; }
+
+/* Account email states */
+.auth-status-icon { width: 56px; height: 56px; margin: .25rem auto 1rem; display: grid; place-items: center; border-radius: 16px; background: #e5f6ee; color: #16845d; font-size: 1.5rem; font-weight: 800; }
+.auth-status-icon svg { width: 28px; height: 28px; }
+.auth-status-icon.danger { background: #fdecea; color: #c2412f; }
+
+/* Continue with Google */
+.btn-google { display: flex; align-items: center; justify-content: center; gap: .65rem; padding: .62rem 1rem; border: 1px solid #d5dedb; border-radius: 9px; background: #fff; color: #1f2d2b; font-weight: 600; }
+.btn-google:hover { background: #f5f8f7; border-color: #c3d0cc; color: #1f2d2b; }
+.btn-google svg { width: 20px; height: 20px; }
+.auth-divider { display: flex; align-items: center; gap: .75rem; margin: 1.1rem 0; color: #8a9995; font-size: .8rem; }
+.auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: #e3ebe8; }

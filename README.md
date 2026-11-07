@@ -43,11 +43,59 @@ Open http://localhost:5173. The checked-in development environment file points t
 ## Authentication, cookies, and CSRF
 
 - `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, and `GET /api/auth/csrf`.
-- Registration signs in the new user. Identity stores a salted password hash; the API never returns the password or hash.
+- Account email endpoints: `POST /api/auth/confirm-email`, `POST /api/auth/resend-confirmation`, `POST /api/auth/forgot-password`, and `POST /api/auth/reset-password`.
+- Registration creates the account and emails a confirmation link; it does not sign the user in. Sign-in is refused (403, `code: email_not_confirmed`) until the email is confirmed, and that response is only returned after a correct password. Identity stores a salted password hash; the API never returns the password or hash.
 - Authentication uses an HttpOnly cookie (8-hour lifetime, sliding expiration, SameSite=Lax). HTTPS requests receive Secure cookies; local HTTP development does not.
 - Before any POST, PUT, PATCH, or DELETE, the frontend obtains an antiforgery request token from `/api/auth/csrf` and sends it in `X-CSRF-TOKEN`. The request token stays in memory, never localStorage/sessionStorage.
 - Development CORS permits only `http://localhost:5173` by default (override with `ViteOrigin`). Production must set `FrontendOrigin` to the exact HTTPS frontend origin.
 - The React dev URL and API use different ports on `localhost`, which remain same-site for SameSite=Lax cookies. For production, use one site or same-site subdomains behind HTTPS. A separate cross-site frontend needs a deliberate `SameSite=None; Secure` deployment configuration and corresponding CSRF/CORS review.
+
+## Account emails (confirmation and password reset)
+
+- Confirmation and reset links point at the frontend (`/confirm-email`, `/reset-password`) and expire after 3 hours. Reset links are single-use, a successful reset also confirms the email and clears any lockout, and links carry the user ID rather than the email address.
+- Forgot-password and resend-confirmation always return the same response, so they cannot be used to discover registered emails. Emails are queued and sent in the background.
+- Register, resend, forgot-password, and reset-password are rate limited per IP (default 5 requests per 15 minutes; `RateLimiting:AuthEmail:PermitLimit` and `RateLimiting:AuthEmail:WindowMinutes`).
+- Sign-in (`POST /api/auth/login`) is rate limited per IP with a sliding window (default 10 attempts per 5 minutes; `RateLimiting:Login:PermitLimit` and `RateLimiting:Login:WindowMinutes`). This complements account lockout (5 wrong passwords locks that account for 15 minutes): lockout protects one account, the IP limit stops one source guessing across many accounts. Rejected requests get `429 Too Many Requests` with a `Retry-After` header and a message saying how long to wait.
+- Limits are keyed by the client IP the API sees. Behind a reverse proxy or load balancer, configure forwarded headers first; otherwise every user shares the proxy's IP and therefore one limit.
+- **Development default:** with no SMTP settings, emails are not sent. They are written to the API log as `DEVELOPMENT EMAIL (not sent)` including the link, so you can copy it. This `Log` provider is refused outside Development.
+- Existing accounts: the `Phase7ConfirmExistingUserEmails` migration marks accounts created before this feature as confirmed so nobody is locked out. Apply it with the usual `database update` command.
+- `Auth:RequireConfirmedEmail` (default `true`) can be set to `false` for a private single-user install without email; registration then signs in immediately as before.
+
+### Sending real email with Gmail
+
+1. Turn on 2-Step Verification for the Google account, then create an App Password at https://myaccount.google.com/apppasswords. Your normal Gmail password will not work.
+2. Store the settings in User Secrets (never in appsettings files):
+
+~~~powershell
+dotnet user-secrets set "Email:Provider" "Smtp" --project backend/DollarShark.Api
+dotnet user-secrets set "Email:Smtp:Host" "smtp.gmail.com" --project backend/DollarShark.Api
+dotnet user-secrets set "Email:Smtp:Port" "587" --project backend/DollarShark.Api
+dotnet user-secrets set "Email:Smtp:Username" "you@gmail.com" --project backend/DollarShark.Api
+dotnet user-secrets set "Email:Smtp:Password" "your-16-character-app-password" --project backend/DollarShark.Api
+dotnet user-secrets set "Email:FromAddress" "you@gmail.com" --project backend/DollarShark.Api
+~~~
+
+Gmail only sends as the signed-in address (or a verified alias), and personal accounts are limited to roughly 500 emails per day, which is fine for testing and small launches. For a public launch, the same SMTP settings work with a transactional provider (Amazon SES, SendGrid, Postmark, Mailgun) and your own domain. In production set these as environment variables (for example `Email__Smtp__Password`) and set `Auth:FrontendBaseUrl` if links should point somewhere other than `FrontendOrigin`.
+
+## Continue with Google (optional)
+
+The "Continue with Google" button only appears when a Google Client ID and Secret are configured; without them the app behaves exactly as before.
+
+1. Go to https://console.cloud.google.com/, create a project (for example "DollarShark").
+2. **APIs & Services → OAuth consent screen**: choose *External*, enter the app name, support email and developer email. The default scopes (`openid`, `email`, `profile`) are enough and need no Google review. While the app is in *Testing* mode, add your own Google account under *Test users*.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**: type *Web application*. Under *Authorized redirect URIs* add `http://localhost:5017/signin-google` (and later `https://<your-api-domain>/signin-google` for production).
+4. Store the values in User Secrets:
+
+~~~powershell
+dotnet user-secrets set "Authentication:Google:ClientId" "<client-id>.apps.googleusercontent.com" --project backend/DollarShark.Api
+dotnet user-secrets set "Authentication:Google:ClientSecret" "<client-secret>" --project backend/DollarShark.Api
+~~~
+
+Restart the API. How accounts are matched:
+- First Google sign-in with a new email creates a confirmed account with no password (the user can always use Google, or use *Forgot password?* to add one).
+- If a **confirmed** account already has that email, Google is linked to it.
+- If an **unconfirmed** account has that email, its password is removed before linking, because whoever registered it never proved they own the address. This blocks "pre-registration" account takeovers.
+- Google accounts whose email Google has not verified are refused.
 
 ## Statement uploads
 
@@ -66,7 +114,7 @@ Open http://localhost:5173. The checked-in development environment file points t
 - Optional `StatementCsv:MaxRows` defaults to 10,000 (permitted configuration range 1–100,000). Parsing also enforces the configured statement file-size limit. Invalid values and wrong-width rows are returned with row diagnostics; empty files, invalid UTF-8, malformed quoting, missing/ambiguous columns, and limit violations return a clear error.
 - PDF and XLSX uploads remain stored but cannot be preview-parsed. CSV previews are temporary responses; they are not persisted.
 
-Email confirmation and password reset are deferred. Registration is open and currently has no email verification, recovery, MFA, or dedicated per-IP rate limit; do not treat this phase as ready for unrestricted public registration. Configure HTTPS, a production data-protection key store, exact frontend origin, database backups, and monitoring before exposing it publicly.
+Registration requires email confirmation and supports password reset (see above). Sign-in is rate limited per IP; MFA is not implemented yet. Configure HTTPS, a production data-protection key store, exact frontend origin, database backups, and monitoring before exposing it publicly.
 
 To create optional demo data for your own account, replace the email placeholder in `docs/sample-data.sql` with the email you registered, then run the script against the DollarShark database. It adds a sample account, private category, and three transactions; rerunning it does not duplicate those sample transactions.
 

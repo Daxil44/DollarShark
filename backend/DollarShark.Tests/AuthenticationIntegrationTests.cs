@@ -343,8 +343,17 @@ public sealed class AuthenticationIntegrationTests
         {
             builder.UseEnvironment(environment);
             builder.ConfigureLogging(logging => logging.ClearProviders());
+            // These tests cover session/ownership behaviour; email confirmation has its own test class.
+            builder.UseSetting("Auth:RequireConfirmedEmail", "false");
+            builder.UseSetting("RateLimiting:AuthEmail:PermitLimit", "1000");
+            builder.UseSetting("RateLimiting:Login:PermitLimit", "1000");
             if (environment == "Production")
+            {
                 builder.UseSetting("FrontendOrigin", "https://app.example.test");
+                builder.UseSetting("Email:Provider", "Smtp");
+                builder.UseSetting("Email:Smtp:Host", "smtp.example.test");
+                builder.UseSetting("Email:FromAddress", "no-reply@example.test");
+            }
             builder.ConfigureServices(services =>
             {
                 services.AddDataProtection().UseEphemeralDataProtectionProvider();

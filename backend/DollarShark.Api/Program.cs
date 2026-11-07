@@ -5,7 +5,12 @@ using DollarShark.Application.Dashboard;
 using DollarShark.Application.Transactions;
 using DollarShark.Application.Transfers;
 using DollarShark.Application.Statements;
+using System.Threading.RateLimiting;
+using DollarShark.Api.Controllers;
+using DollarShark.Api.Email;
 using DollarShark.Api.Security;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.RateLimiting;
 using DollarShark.Infrastructure.Identity;
 using DollarShark.Infrastructure.Persistence;
 using DollarShark.Infrastructure.Statements;
@@ -120,6 +125,102 @@ if (string.IsNullOrWhiteSpace(allowedFrontendOrigin) || !Uri.TryCreate(allowedFr
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(parsedFrontendOrigin.GetLeftPart(UriPartial.Authority)).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 
+// Optional "Continue with Google". Enabled only when both values are configured (User Secrets / environment).
+var googleClientId = builder.Configuration["Authentication:Google:ClientId"];
+var googleClientSecret = builder.Configuration["Authentication:Google:ClientSecret"];
+if (!string.IsNullOrWhiteSpace(googleClientId) && !string.IsNullOrWhiteSpace(googleClientSecret))
+{
+    builder.Services.AddAuthentication().AddGoogle(options =>
+    {
+        options.ClientId = googleClientId;
+        options.ClientSecret = googleClientSecret;
+        options.SignInScheme = IdentityConstants.ExternalScheme;
+        // Google returns with a top-level GET redirect, so Lax is enough and also works on http://localhost.
+        options.CorrelationCookie.SameSite = SameSiteMode.Lax;
+        options.CorrelationCookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
+        options.ClaimActions.MapJsonKey(AuthController.GoogleEmailVerifiedClaim, "verified_email");
+        options.ClaimActions.MapJsonKey(AuthController.GoogleEmailVerifiedClaim, "email_verified");
+    });
+}
+
+// Account emails (confirmation + password reset).
+builder.Services.Configure<AccountAuthOptions>(builder.Configuration.GetSection("Auth"));
+builder.Services.PostConfigure<AccountAuthOptions>(options =>
+{
+    if (string.IsNullOrWhiteSpace(builder.Configuration["Auth:FrontendBaseUrl"]))
+        options.FrontendBaseUrl = parsedFrontendOrigin.GetLeftPart(UriPartial.Authority);
+});
+builder.Services.Configure<DataProtectionTokenProviderOptions>(options => options.TokenLifespan = TimeSpan.FromHours(3));
+var emailOptions = builder.Configuration.GetSection("Email").Get<EmailOptions>() ?? new EmailOptions();
+if (string.IsNullOrWhiteSpace(builder.Configuration["Email:Provider"]) && !string.IsNullOrWhiteSpace(emailOptions.Smtp.Host))
+    emailOptions.Provider = EmailOptions.SmtpProvider;
+if (string.Equals(emailOptions.Provider, EmailOptions.SmtpProvider, StringComparison.OrdinalIgnoreCase))
+{
+    if (string.IsNullOrWhiteSpace(emailOptions.Smtp.Host) || emailOptions.Smtp.Port is < 1 or > 65535 ||
+        !System.Net.Mail.MailAddress.TryCreate(emailOptions.FromAddress, out _))
+        throw new InvalidOperationException("Email:Provider is Smtp, so Email:Smtp:Host, a valid Email:Smtp:Port and Email:FromAddress are required.");
+    builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
+}
+else if (string.Equals(emailOptions.Provider, EmailOptions.LogProvider, StringComparison.OrdinalIgnoreCase))
+{
+    if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException("The Log email provider writes account links to the log and is only allowed in Development. Configure Email:Provider=Smtp with Email:Smtp settings.");
+    builder.Services.AddScoped<IEmailSender, LogEmailSender>();
+}
+else
+{
+    throw new InvalidOperationException("Email:Provider must be Smtp or Log.");
+}
+builder.Services.Configure<EmailOptions>(options =>
+{
+    builder.Configuration.GetSection("Email").Bind(options);
+    options.Provider = emailOptions.Provider;
+});
+builder.Services.AddSingleton<EmailQueue>();
+builder.Services.AddHostedService<EmailDispatchService>();
+
+// Limit endpoints that send email so they cannot be used to flood an inbox or exhaust the mail quota.
+var emailPermitLimit = builder.Configuration.GetValue("RateLimiting:AuthEmail:PermitLimit", 5);
+var emailWindowMinutes = builder.Configuration.GetValue("RateLimiting:AuthEmail:WindowMinutes", 15);
+var loginPermitLimit = builder.Configuration.GetValue("RateLimiting:Login:PermitLimit", 10);
+var loginWindowMinutes = builder.Configuration.GetValue("RateLimiting:Login:WindowMinutes", 5);
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(AuthController.EmailRateLimitPolicy, context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = Math.Max(1, emailPermitLimit),
+            Window = TimeSpan.FromMinutes(Math.Max(1, emailWindowMinutes)),
+            QueueLimit = 0,
+        }));
+    // Sign-in attempts per IP. Account lockout already protects one account from repeated guesses;
+    // this stops one source from guessing across many accounts (credential stuffing / password spraying)
+    // and from burning CPU on password hashing. A sliding window avoids a burst right at each window reset.
+    options.AddPolicy(AuthController.LoginRateLimitPolicy, context => RateLimitPartition.GetSlidingWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new SlidingWindowRateLimiterOptions
+        {
+            PermitLimit = Math.Max(1, loginPermitLimit),
+            Window = TimeSpan.FromMinutes(Math.Max(1, loginWindowMinutes)),
+            SegmentsPerWindow = Math.Max(1, loginWindowMinutes),
+            QueueLimit = 0,
+        }));
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        var wait = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter) ? retryAfter : TimeSpan.FromMinutes(1);
+        var minutes = Math.Max(1, (int)Math.Ceiling(wait.TotalMinutes));
+        context.HttpContext.Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        context.HttpContext.Response.ContentType = "application/problem+json";
+        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = StatusCodes.Status429TooManyRequests,
+            Title = $"Too many requests. Please wait about {minutes} minute{(minutes == 1 ? "" : "s")} and try again.",
+        }, cancellationToken);
+    };
+});
+
 var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
@@ -127,6 +228,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
