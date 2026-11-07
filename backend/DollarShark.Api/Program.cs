@@ -5,7 +5,11 @@ using DollarShark.Application.Dashboard;
 using DollarShark.Application.Transactions;
 using DollarShark.Application.Transfers;
 using DollarShark.Application.Statements;
+using System.Threading.RateLimiting;
+using DollarShark.Api.Controllers;
+using DollarShark.Api.Email;
 using DollarShark.Api.Security;
+using Microsoft.AspNetCore.RateLimiting;
 using DollarShark.Infrastructure.Identity;
 using DollarShark.Infrastructure.Persistence;
 using DollarShark.Infrastructure.Statements;
@@ -120,6 +124,67 @@ if (string.IsNullOrWhiteSpace(allowedFrontendOrigin) || !Uri.TryCreate(allowedFr
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(parsedFrontendOrigin.GetLeftPart(UriPartial.Authority)).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 
+// Account emails (confirmation + password reset).
+builder.Services.Configure<AccountAuthOptions>(builder.Configuration.GetSection("Auth"));
+builder.Services.PostConfigure<AccountAuthOptions>(options =>
+{
+    if (string.IsNullOrWhiteSpace(builder.Configuration["Auth:FrontendBaseUrl"]))
+        options.FrontendBaseUrl = parsedFrontendOrigin.GetLeftPart(UriPartial.Authority);
+});
+builder.Services.Configure<DataProtectionTokenProviderOptions>(options => options.TokenLifespan = TimeSpan.FromHours(3));
+var emailOptions = builder.Configuration.GetSection("Email").Get<EmailOptions>() ?? new EmailOptions();
+if (string.IsNullOrWhiteSpace(builder.Configuration["Email:Provider"]) && !string.IsNullOrWhiteSpace(emailOptions.Smtp.Host))
+    emailOptions.Provider = EmailOptions.SmtpProvider;
+if (string.Equals(emailOptions.Provider, EmailOptions.SmtpProvider, StringComparison.OrdinalIgnoreCase))
+{
+    if (string.IsNullOrWhiteSpace(emailOptions.Smtp.Host) || emailOptions.Smtp.Port is < 1 or > 65535 ||
+        !System.Net.Mail.MailAddress.TryCreate(emailOptions.FromAddress, out _))
+        throw new InvalidOperationException("Email:Provider is Smtp, so Email:Smtp:Host, a valid Email:Smtp:Port and Email:FromAddress are required.");
+    builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
+}
+else if (string.Equals(emailOptions.Provider, EmailOptions.LogProvider, StringComparison.OrdinalIgnoreCase))
+{
+    if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException("The Log email provider writes account links to the log and is only allowed in Development. Configure Email:Provider=Smtp with Email:Smtp settings.");
+    builder.Services.AddScoped<IEmailSender, LogEmailSender>();
+}
+else
+{
+    throw new InvalidOperationException("Email:Provider must be Smtp or Log.");
+}
+builder.Services.Configure<EmailOptions>(options =>
+{
+    builder.Configuration.GetSection("Email").Bind(options);
+    options.Provider = emailOptions.Provider;
+});
+builder.Services.AddSingleton<EmailQueue>();
+builder.Services.AddHostedService<EmailDispatchService>();
+
+// Limit endpoints that send email so they cannot be used to flood an inbox or exhaust the mail quota.
+var emailPermitLimit = builder.Configuration.GetValue("RateLimiting:AuthEmail:PermitLimit", 5);
+var emailWindowMinutes = builder.Configuration.GetValue("RateLimiting:AuthEmail:WindowMinutes", 15);
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(AuthController.EmailRateLimitPolicy, context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = Math.Max(1, emailPermitLimit),
+            Window = TimeSpan.FromMinutes(Math.Max(1, emailWindowMinutes)),
+            QueueLimit = 0,
+        }));
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.ContentType = "application/problem+json";
+        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = StatusCodes.Status429TooManyRequests,
+            Title = "Too many requests. Please wait a few minutes and try again.",
+        }, cancellationToken);
+    };
+});
+
 var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
@@ -127,6 +192,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

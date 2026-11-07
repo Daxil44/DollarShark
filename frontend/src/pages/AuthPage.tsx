@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react';
-import { Alert, Button, Card, Container, Form, Spinner } from 'react-bootstrap';
+import { Alert, Button, Form, Spinner } from 'react-bootstrap';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { apiErrorMessage } from '../api';
-import { useAuth } from '../auth';
-import DollarSharkLogo from '../components/DollarSharkLogo';
+import { api, apiErrorMessage } from '../api';
+import { isEmailNotConfirmed, useAuth } from '../auth';
+import AuthLayout, { MailIcon, passwordHint } from '../components/AuthLayout';
 
 export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const { user, login, register } = useAuth();
@@ -13,59 +13,84 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [unconfirmed, setUnconfirmed] = useState(false);
+  const [checkInboxFor, setCheckInboxFor] = useState('');
+  const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent'>('idle');
   const isRegister = mode === 'register';
   const from = (location.state as { from?: string | { pathname?: string; search?: string; hash?: string } } | null)?.from;
   const destination = typeof from === 'string' ? from : from?.pathname ? `${from.pathname}${from.search ?? ''}${from.hash ?? ''}` : '/dashboard';
+  const notice = (location.state as { notice?: string } | null)?.notice;
 
   if (user) return <Navigate to={destination === '/login' || destination === '/register' ? '/dashboard' : destination} replace />;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
+    setUnconfirmed(false);
+    setResendState('idle');
     setSubmitting(true);
     try {
-      if (isRegister) await register(email.trim(), password);
-      else await login(email.trim(), password);
+      if (isRegister) {
+        const outcome = await register(email.trim(), password);
+        if (outcome === 'confirmationRequired') { setCheckInboxFor(email.trim()); return; }
+      } else {
+        await login(email.trim(), password);
+      }
       navigate(destination, { replace: true });
     } catch (submitError) {
-      setError(apiErrorMessage(submitError));
+      if (isEmailNotConfirmed(submitError)) setUnconfirmed(true);
+      else setError(apiErrorMessage(submitError));
     } finally {
       setSubmitting(false);
     }
   }
 
-  return <main className="auth-split">
-    <aside className="auth-aside" aria-hidden="true">
-      <Link to="/" className="auth-aside-logo" tabIndex={-1}><DollarSharkLogo /></Link>
-      <div className="auth-aside-copy">
-        <h2>{isRegister ? 'Start swimming toward clearer finances.' : 'Good to see you again.'}</h2>
-        <p>Import statements, catch duplicates, link transfers, and see where every dollar goes.</p>
-      </div>
-      <div className="auth-aside-art">
-        <div className="auth-mini-card">
-          <small>Net cash flow</small><strong>+$2,370.00</strong>
-          <svg viewBox="0 0 200 60" preserveAspectRatio="none"><path d="M0 50 C30 46 50 48 70 38 S110 30 130 26 S170 14 200 8" /></svg>
-        </div>
-        <div className="auth-mini-card small-card"><span className="tick">✓</span>3 duplicates skipped</div>
-      </div>
-      <ul className="auth-aside-points"><li>No bank passwords</li><li>Private to your account</li><li>CSV preview before import</li></ul>
-    </aside>
-    <section className="auth-main"><Container className="auth-container">
-    <Link to="/" className="auth-back">← Back to home</Link>
-    <Card className="auth-card"><Card.Body>
-      <Link to="/" className="brand mb-4 d-inline-flex" aria-label="DollarShark home"><DollarSharkLogo /></Link>
-      <h1 className="h3 fw-bold">{isRegister ? 'Create your account' : 'Welcome back'}</h1>
-      <p className="text-secondary">{isRegister ? 'Your finance data will be private to your account.' : 'Sign in to see your private finance workspace.'}</p>
-      {error && <Alert variant="danger">{error}</Alert>}
-      <Form onSubmit={submit}>
-        <Form.Group className="mb-3"><Form.Label>Email</Form.Label><Form.Control type="email" autoComplete="email" required maxLength={256} value={email} onChange={event => setEmail(event.target.value)} /></Form.Group>
-        <Form.Group className="mb-3"><Form.Label>Password</Form.Label><Form.Control type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} required minLength={isRegister ? 10 : undefined} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} />
-          {isRegister && <Form.Text>At least 10 characters, including uppercase, lowercase, a number, and a symbol.</Form.Text>}
-        </Form.Group>
-        <Button type="submit" variant="dark" className="w-100" disabled={submitting}>{submitting ? <><Spinner size="sm" className="me-2" />Please wait…</> : isRegister ? 'Create account' : 'Sign in'}</Button>
-      </Form>
-      <div className="text-center mt-3 small">{isRegister ? <>Already registered? <Link to="/login">Sign in</Link></> : <>New to DollarShark? <Link to="/register">Create an account</Link></>}</div>
-      {isRegister && <div className="small text-secondary mt-3">Email confirmation and password recovery are not available yet. Use a unique password.</div>}
-    </Card.Body></Card>
-  </Container></section></main>;
+  async function resend(address: string) {
+    setResendState('sending');
+    setError('');
+    try {
+      await api.post('/api/auth/resend-confirmation', { email: address });
+      setResendState('sent');
+    } catch (resendError) {
+      setResendState('idle');
+      setError(apiErrorMessage(resendError));
+    }
+  }
+
+  if (checkInboxFor) return <AuthLayout asideTitle="Almost there — check your inbox.">
+    <div className="text-center">
+      <MailIcon />
+      <h1 className="h3 fw-bold">Check your email</h1>
+      <p className="text-secondary">We sent a confirmation link to <strong className="text-body text-break">{checkInboxFor}</strong>. Open it to activate your account, then sign in.</p>
+      {error && <Alert variant="danger" className="text-start">{error}</Alert>}
+      {resendState === 'sent' && <Alert variant="success" className="text-start">A new confirmation link is on its way.</Alert>}
+      <Link className="btn btn-dark w-100 mb-2" to="/login">Go to sign in</Link>
+      <Button variant="link" className="small" disabled={resendState === 'sending'} onClick={() => void resend(checkInboxFor)}>{resendState === 'sending' ? 'Sending…' : "Didn't get it? Resend the link"}</Button>
+      <p className="small text-secondary mt-2 mb-0">The link expires in 3 hours. Check your spam folder too.</p>
+    </div>
+  </AuthLayout>;
+
+  return <AuthLayout asideTitle={isRegister ? 'Start swimming toward clearer finances.' : 'Good to see you again.'}>
+    <h1 className="h3 fw-bold">{isRegister ? 'Create your account' : 'Welcome back'}</h1>
+    <p className="text-secondary">{isRegister ? 'Your finance data will be private to your account.' : 'Sign in to see your private finance workspace.'}</p>
+    {notice && !error && !unconfirmed && <Alert variant="success">{notice}</Alert>}
+    {error && <Alert variant="danger">{error}</Alert>}
+    {unconfirmed && <Alert variant="warning">
+      <div className="fw-semibold mb-1">Confirm your email first</div>
+      <div className="small mb-2">Open the confirmation link we emailed to <strong>{email.trim()}</strong>, then sign in.</div>
+      {resendState === 'sent' ? <div className="small fw-semibold">New link sent — check your inbox.</div> :
+        <Button size="sm" variant="outline-dark" disabled={resendState === 'sending'} onClick={() => void resend(email.trim())}>{resendState === 'sending' ? 'Sending…' : 'Resend confirmation email'}</Button>}
+    </Alert>}
+    <Form onSubmit={submit}>
+      <Form.Group className="mb-3" controlId="auth-email"><Form.Label>Email</Form.Label><Form.Control type="email" autoComplete="email" required maxLength={256} value={email} onChange={event => setEmail(event.target.value)} /></Form.Group>
+      <Form.Group className="mb-3" controlId="auth-password">
+        <div className="d-flex justify-content-between align-items-baseline"><Form.Label>Password</Form.Label>{!isRegister && <Link to="/forgot-password" className="small">Forgot password?</Link>}</div>
+        <Form.Control type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} required minLength={isRegister ? 10 : undefined} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} />
+        {isRegister && <Form.Text>{passwordHint}</Form.Text>}
+      </Form.Group>
+      <Button type="submit" variant="dark" className="w-100" disabled={submitting}>{submitting ? <><Spinner size="sm" className="me-2" />Please wait…</> : isRegister ? 'Create account' : 'Sign in'}</Button>
+    </Form>
+    <div className="text-center mt-3 small">{isRegister ? <>Already registered? <Link to="/login">Sign in</Link></> : <>New to DollarShark? <Link to="/register">Create an account</Link></>}</div>
+    {isRegister && <div className="small text-secondary mt-3">We'll email you a link to confirm your address before your first sign-in.</div>}
+  </AuthLayout>;
 }

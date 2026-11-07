@@ -24,9 +24,11 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       await refreshCsrfToken();
     },
     async register(email, password) {
-      const response = await api.post<UserProfile>('/api/auth/register', { email, password });
+      const response = await api.post<UserProfile | { requiresEmailConfirmation: boolean }>('/api/auth/register', { email, password });
+      if (response.status === 202 || 'requiresEmailConfirmation' in response.data) return 'confirmationRequired';
       setUser(response.data);
       await refreshCsrfToken();
+      return 'signedIn';
     },
     async logout() {
       await api.post('/api/auth/logout');

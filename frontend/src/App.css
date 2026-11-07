@@ -90,3 +90,8 @@ footer span { padding: 0 .3rem; }
 .stat-delta { font-weight: 700; }
 .insight-table th { font-size: .78rem; color: #6c817b; font-weight: 700; white-space: nowrap; }
 .insight-table td { white-space: nowrap; }
+
+/* Account email states */
+.auth-status-icon { width: 56px; height: 56px; margin: .25rem auto 1rem; display: grid; place-items: center; border-radius: 16px; background: #e5f6ee; color: #16845d; font-size: 1.5rem; font-weight: 800; }
+.auth-status-icon svg { width: 28px; height: 28px; }
+.auth-status-icon.danger { background: #fdecea; color: #c2412f; }
