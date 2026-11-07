@@ -318,7 +318,7 @@ export default function StatementsPage() {
       {loadingAccounts ? <div className="py-3"><Spinner animation="border" size="sm" aria-label="Loading accounts" /></div> : accounts.length === 0 ?
         <Alert variant="info" className="mb-0">Create a financial account before uploading a statement. <Link to="/accounts">Go to accounts</Link>.</Alert> :
         <Form onSubmit={event => void upload(event)}>
-          <div className="row g-3 align-items-end">
+          <div className="row g-3 align-items-start">
             <Form.Group className="col-md-4"><Form.Label>Statement type</Form.Label><Form.Select required isInvalid={!!statementTypeValidation} value={statementType} onChange={event => setStatementType(event.target.value as 'Bank' | 'CreditCard')}><option value="Bank">Bank statement</option><option value="CreditCard">Credit card statement</option></Form.Select>{statementTypeValidation && <Form.Control.Feedback type="invalid">{statementTypeValidation}</Form.Control.Feedback>}</Form.Group>
             <Form.Group className="col-md-4"><Form.Label>Financial account</Form.Label><Form.Select required isInvalid={!!statementTypeValidation} value={selectedAccount} onChange={event => {
               const nextAccountId = event.target.value;

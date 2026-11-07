@@ -9,6 +9,7 @@ import CategoriesPage from './pages/CategoriesPage';
 import TransactionsPage from './pages/TransactionsPage';
 import StatementsPage from './pages/StatementsPage';
 import DashboardPage from './pages/DashboardPage';
+import LandingPage from './pages/LandingPage';
 import DollarSharkLogo from './components/DollarSharkLogo';
 import './App.css';
 
@@ -20,14 +21,16 @@ function ProtectedApp() {
   const [signingOut, setSigningOut] = useState(false);
 
   if (checking) return <div className="auth-loading"><Spinner animation="border" role="status"><span className="visually-hidden">Checking session…</span></Spinner></div>;
-  if (!user) return <Navigate to="/login" replace state={{ from: { pathname: location.pathname, search: location.search, hash: location.hash } }} />;
+  if (!user) return signingOut
+    ? <Navigate to="/" replace />
+    : <Navigate to="/login" replace state={{ from: { pathname: location.pathname, search: location.search, hash: location.hash } }} />;
 
   async function signOut() {
     setError('');
     setSigningOut(true);
     try {
       await logout();
-      navigate('/login', { replace: true });
+      navigate('/', { replace: true });
     } catch (logoutError) {
       setError(apiErrorMessage(logoutError));
     } finally {
@@ -50,7 +53,6 @@ function ProtectedApp() {
     <main><Container className="main-content">
       {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
       <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/categories" element={<CategoriesPage />} />
@@ -63,8 +65,16 @@ function ProtectedApp() {
   </div>;
 }
 
+function HomeRoute() {
+  const { user, checking } = useAuth();
+  if (checking) return <div className="auth-loading"><Spinner animation="border" role="status"><span className="visually-hidden">Checking session…</span></Spinner></div>;
+  if (user) return <Navigate to="/dashboard" replace />;
+  return <LandingPage />;
+}
+
 export default function App() {
   return <Routes>
+    <Route path="/" element={<HomeRoute />} />
     <Route path="/login" element={<AuthPage mode="login" />} />
     <Route path="/register" element={<AuthPage mode="register" />} />
     <Route path="*" element={<ProtectedApp />} />

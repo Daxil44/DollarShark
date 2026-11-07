@@ -242,11 +242,14 @@ export default function TransactionsPage() {
   }
 
   const totalPages = Math.max(page.totalPages, 1);
+  const isLinkable = (transaction: Transaction) => transaction.transactionType === 'Transfer' && !transaction.linkedTransferTransactionId && transaction.amount !== 0;
+  const showSelectColumn = transactions.some(isLinkable);
+  const showTransferColumn = transactions.some(transaction => transaction.transactionType === 'Transfer' || transaction.linkedTransferCounterpart);
   return <>
     <div className="page-heading">
       <div><div className="eyebrow">YOUR ACTIVITY</div><h1>Transactions</h1><p className="text-secondary mb-0">Record and find activity across your accounts.</p></div>
       <div className="d-flex flex-wrap gap-2">
-        <Button variant="outline-primary" onClick={reviewSelectedTransfers} disabled={selectedTransferIds.length !== 2}>Review {selectedTransferIds.length} selected transfers</Button>
+        {selectedTransferIds.length > 0 && <Button variant="outline-primary" onClick={reviewSelectedTransfers} disabled={selectedTransferIds.length !== 2}>{selectedTransferIds.length === 2 ? 'Review transfer pair' : 'Select one more transfer'} ({selectedTransferIds.length}/2)</Button>}
         <Button variant="dark" onClick={openCreate} disabled={accounts.length === 0}>＋ Add transaction</Button>
       </div>
     </div>
@@ -280,19 +283,19 @@ export default function TransactionsPage() {
         transactions.length === 0 ? <div className="empty-state"><div className="empty-icon">↔</div><h3>No transactions found</h3><p className="text-secondary">Add a transaction or adjust the filters.</p></div> :
         <Table responsive hover className="align-middle mb-0">
           <thead><tr>
-            <th>Select</th><th><Button variant="link" className="p-0 text-decoration-none text-dark fw-semibold" onClick={() => changeSort('date')}>Date {sortBy === 'date' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}</Button></th>
+            {showSelectColumn && <th><span className="visually-hidden">Select transfer to link</span>Link</th>}<th><Button variant="link" className="p-0 text-decoration-none text-dark fw-semibold" onClick={() => changeSort('date')}>Date {sortBy === 'date' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}</Button></th>
             <th>Description</th><th>Account</th><th>Category</th>
             <th><Button variant="link" className="p-0 text-decoration-none text-dark fw-semibold" onClick={() => changeSort('amount')}>Amount {sortBy === 'amount' ? (sortDirection === 'asc' ? '↑' : '↓') : ''}</Button></th>
-            <th>Type</th><th>Transfer link</th><th className="text-end">Actions</th>
+            <th>Type</th>{showTransferColumn && <th>Transfer link</th>}<th className="text-end">Actions</th>
           </tr></thead>
           <tbody>{transactions.map(transaction => <tr key={transaction.id}>
-            <td>{transaction.transactionType === 'Transfer' && !transaction.linkedTransferTransactionId && transaction.amount !== 0 && <Form.Check aria-label={`Select ${transaction.description} to link as a transfer`} checked={selectedTransferIds.includes(transaction.id)} disabled={!selectedTransferIds.includes(transaction.id) && selectedTransferIds.length >= 2} onChange={() => toggleTransferSelection(transaction)} />}</td>
+            {showSelectColumn && <td>{isLinkable(transaction) && <Form.Check aria-label={`Select ${transaction.description} to link as a transfer`} checked={selectedTransferIds.includes(transaction.id)} disabled={!selectedTransferIds.includes(transaction.id) && selectedTransferIds.length >= 2} onChange={() => toggleTransferSelection(transaction)} />}</td>}
             <td className="text-nowrap">{transaction.transactionDate}</td>
             <td><strong>{transaction.description}</strong>{transaction.subDescription && <div className="small text-secondary">{transaction.subDescription}</div>}</td>
-            <td>{transaction.accountName}</td><td>{transaction.categoryName ?? 'Uncategorized'}</td>
-            <td className={transaction.amount < 0 ? 'text-danger text-nowrap' : 'text-success text-nowrap'}>{formatAmount(transaction)}</td>
+            <td className="text-nowrap">{transaction.accountName}</td><td className="text-nowrap">{transaction.categoryName ?? <span className="text-secondary">Uncategorized</span>}</td>
+            <td className={`text-nowrap fw-semibold ${transaction.amount < 0 ? 'text-danger' : 'text-success'}`}>{formatAmount(transaction)}</td>
             <td><Badge bg={transaction.transactionType === 'Expense' ? 'secondary' : transaction.transactionType === 'Transfer' ? 'info' : 'success'} text={transaction.transactionType === 'Transfer' ? 'dark' : undefined}>{transaction.transactionType}</Badge></td>
-            <td>{transaction.linkedTransferCounterpart ? <Badge bg="success">Linked</Badge> : transaction.transactionType === 'Transfer' ? <Badge bg="light" text="dark">Unlinked</Badge> : <span className="text-secondary">—</span>}</td>
+            {showTransferColumn && <td>{transaction.linkedTransferCounterpart ? <Badge bg="success">Linked</Badge> : transaction.transactionType === 'Transfer' ? <Badge bg="light" text="dark">Unlinked</Badge> : <span className="text-secondary">—</span>}</td>}
             <td className="text-end text-nowrap">{transaction.linkedTransferCounterpart ? <><Button size="sm" variant="outline-primary" className="me-2" onClick={() => navigate(`/transactions?focus=${transaction.linkedTransferCounterpart!.id}`)}>View counterpart</Button><Button size="sm" variant="outline-danger" onClick={() => void unlinkTransfer(transaction)}>Unlink</Button></> : <><Button size="sm" variant="outline-secondary" className="me-2" onClick={() => openEdit(transaction)}>Edit</Button><Button size="sm" variant="outline-danger" onClick={() => void remove(transaction)}>Delete</Button></>}</td>
           </tr>)}</tbody>
         </Table>}

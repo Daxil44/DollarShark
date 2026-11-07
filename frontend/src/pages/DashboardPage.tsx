@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Alert, Badge, Button, Card, Form, Spinner, Table } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Form, Nav, Spinner, Table } from 'react-bootstrap';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer,
@@ -10,8 +10,33 @@ import type { Account, AccountBalanceHistory, Category, DashboardBalanceTotals, 
 
 type Period = { from: string; to: string };
 type Preset = 'thisMonth' | 'lastMonth' | 'last3Months' | 'thisYear' | 'allTime' | 'custom';
+type DashboardTab = 'overview' | 'cashflow' | 'balances';
 const recentLimit = 8;
-const chartColors = ['#17845f', '#3176a5', '#e2a23b', '#7858a6', '#d26c55', '#5c9c99', '#80914c', '#8d6e63'];
+// Category (expense) palette deliberately avoids the brand/income green so large slices don't read as "good".
+const chartColors = ['#3176a5', '#e2a23b', '#7858a6', '#d26c55', '#5c9c99', '#b0687f', '#80914c', '#8d6e63'];
+const rangeStorageKey = 'dollarshark.dashboard.range';
+const tabStorageKey = 'dollarshark.dashboard.tab';
+const presets: Preset[] = ['thisMonth', 'lastMonth', 'last3Months', 'thisYear', 'allTime', 'custom'];
+const tabs: { key: DashboardTab; label: string }[] = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'cashflow', label: 'Cash flow' },
+  { key: 'balances', label: 'Balances' },
+];
+
+function readStored<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value && (allowed as readonly string[]).includes(value) ? value as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try { window.localStorage.setItem(key, value); } catch { /* storage unavailable; preference is not kept */ }
+}
+
+const compactNumber = (value: unknown) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value));
 
 function dateInput(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -46,13 +71,16 @@ function monthLabel(value: string): string {
   return new Date(year, month - 1, 1).toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
 }
 
-function Comparison({ current, previous, currency, previousPeriod }: {
-  current: number; previous: number; currency: string; previousPeriod: string;
+function Comparison({ current, previous, currency, higherIsBetter = true }: {
+  current: number; previous: number; currency: string; higherIsBetter?: boolean;
 }) {
   const difference = current - previous;
-  return <div className="stat-note">Previous: {money(previous, currency)} <span className="mx-1">·</span>
-    <span className={difference < 0 ? 'text-danger' : 'text-success'}>{difference > 0 ? '+' : ''}{money(difference, currency)}</span>
-    <span className="ms-1">({previousPeriod})</span></div>;
+  const improved = higherIsBetter ? difference > 0 : difference < 0;
+  const tone = difference === 0 ? 'text-secondary' : improved ? 'text-success' : 'text-danger';
+  return <div className="stat-compare">
+    <span className={`stat-delta ${tone}`}>{difference > 0 ? '▲' : difference < 0 ? '▼' : '–'} {money(Math.abs(difference), currency)}</span>
+    <span className="text-secondary">vs {money(previous, currency)} before</span>
+  </div>;
 }
 
 function SummaryCards({ summary, previousPeriod, balances }: { summary: DashboardCurrencySummary; previousPeriod: string; balances?: DashboardBalanceTotals }) {
@@ -63,9 +91,9 @@ function SummaryCards({ summary, previousPeriod, balances }: { summary: Dashboar
   const investmentValue = !balances || balances.investmentAccountCount === 0 ? 'No accounts' : balances.recordedInvestmentBalances === null ? 'Not available' : money(balances.recordedInvestmentBalances, summary.currency);
   const investmentNote = !balances || balances.investmentAccountCount === 0 ? 'No investment accounts.' : `Recorded for ${balances.investmentsWithBalances} of ${balances.investmentAccountCount} investment accounts.`;
   const cards = [
-    { label: 'TOTAL INCOME', value: money(summary.income, summary.currency), note: <><span>Selected period activity; refunds follow existing reporting.</span><Comparison current={summary.income} previous={summary.previousIncome} currency={summary.currency} previousPeriod={previousPeriod} /></>, color: 'text-success' },
-    { label: 'TOTAL EXPENSES', value: money(summary.expenses, summary.currency), note: <><span>Selected period activity; transfers excluded.</span><Comparison current={summary.expenses} previous={summary.previousExpenses} currency={summary.currency} previousPeriod={previousPeriod} /></>, color: 'text-danger' },
-    { label: 'NET CASH FLOW', value: money(summary.netCashFlow, summary.currency), note: <>Income minus expenses for the selected period; this is not an account balance.<Comparison current={summary.netCashFlow} previous={summary.previousNetCashFlow} currency={summary.currency} previousPeriod={previousPeriod} /></>, color: summary.netCashFlow < 0 ? 'text-danger' : 'text-success' },
+    { label: 'TOTAL INCOME', value: money(summary.income, summary.currency), note: <><span>Includes refunds.</span><Comparison current={summary.income} previous={summary.previousIncome} currency={summary.currency} /></>, color: 'text-success' },
+    { label: 'TOTAL EXPENSES', value: money(summary.expenses, summary.currency), note: <><span>Transfers excluded.</span><Comparison current={summary.expenses} previous={summary.previousExpenses} currency={summary.currency} higherIsBetter={false} /></>, color: 'text-danger' },
+    { label: 'NET CASH FLOW', value: money(summary.netCashFlow, summary.currency), note: <><span>Income minus expenses — not an account balance.</span><Comparison current={summary.netCashFlow} previous={summary.previousNetCashFlow} currency={summary.currency} /></>, color: summary.netCashFlow < 0 ? 'text-danger' : 'text-success' },
     { label: 'CASH BALANCE', value: cashValue, note: cashNote, color: balances?.cashBalance !== null && balances?.cashBalance !== undefined && balances.cashBalance < 0 ? 'text-danger' : 'text-success' },
     { label: 'CREDIT CARD LIABILITIES', value: cardValue, note: cardNote, color: 'text-danger' },
     { label: 'RECORDED INVESTMENTS', value: investmentValue, note: investmentNote, color: 'text-secondary' },
@@ -94,10 +122,14 @@ function RecentTransactionRow({ transaction }: { transaction: DashboardRecentTra
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const initialPeriod = periodFor('thisMonth');
-  const [preset, setPreset] = useState<Preset>('thisMonth');
-  const [draftPeriod, setDraftPeriod] = useState(initialPeriod);
-  const [period, setPeriod] = useState(initialPeriod);
+  const [initialPreset] = useState<Exclude<Preset, 'custom'>>(() => {
+    const stored = readStored(rangeStorageKey, presets, 'last3Months');
+    return stored === 'custom' ? 'last3Months' : stored;
+  });
+  const [preset, setPreset] = useState<Preset>(initialPreset);
+  const [draftPeriod, setDraftPeriod] = useState(() => periodFor(initialPreset));
+  const [period, setPeriod] = useState(() => periodFor(initialPreset));
+  const [tab, setTab] = useState<DashboardTab>(() => readStored(tabStorageKey, tabs.map(item => item.key), 'overview'));
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [currency, setCurrency] = useState('');
   const [loading, setLoading] = useState(true);
@@ -107,7 +139,7 @@ export default function DashboardPage() {
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [accountTransactions, setAccountTransactions] = useState<TransactionPage | null>(null);
   const [balanceHistory, setBalanceHistory] = useState<AccountBalanceHistory | null>(null);
-  const [balanceInterval, setBalanceInterval] = useState<'Daily' | 'Weekly' | 'Monthly'>('Daily');
+  const [balanceInterval, setBalanceInterval] = useState<'Daily' | 'Weekly' | 'Monthly'>(() => initialPreset === 'allTime' || initialPreset === 'thisYear' ? 'Monthly' : 'Daily');
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState('');
   const [transactionsLoading, setTransactionsLoading] = useState(false);
@@ -181,8 +213,14 @@ export default function DashboardPage() {
     return () => { cancelled = true; };
   }, [selectedAccountId, period.from, period.to, balanceInterval]);
 
+  function chooseTab(value: DashboardTab) {
+    setTab(value);
+    writeStored(tabStorageKey, value);
+  }
+
   function choosePreset(value: Preset) {
     setPreset(value);
+    if (value !== 'custom') writeStored(rangeStorageKey, value);
     if (value === 'allTime' || value === 'thisYear') setBalanceInterval('Monthly');
     else if (value !== 'custom') setBalanceInterval('Daily');
     if (value !== 'custom') {
@@ -223,6 +261,10 @@ export default function DashboardPage() {
       .map(item => ({ ...item, previousMonth, currentMonth }));
   }, [monthlyCategoryData, monthlyCashFlowData]);
   const largestExpenses = useMemo(() => overview?.largestExpenses.filter(item => item.currency === currency) ?? [], [overview, currency]);
+  const categoryTotal = useMemo(() => categoryData.reduce((sum, entry) => sum + entry.amount, 0), [categoryData]);
+  const hasOutgoingTransfers = monthlyCashFlowData.some(item => item.outgoingTransfers !== 0);
+  const hasOtherTransfers = monthlyCashFlowData.some(item => item.transfersToOtherAccounts !== 0);
+  const hasInvestments = monthlyCashFlowData.some(item => item.investmentContributions !== 0);
   const accountBalanceTrends = useMemo(() => overview?.accountBalanceTrends.filter(item => item.currency === currency) ?? [], [overview, currency]);
   const cashBalanceHistory = useMemo(() => {
     if (!overview) return [];
@@ -272,7 +314,7 @@ export default function DashboardPage() {
           <Form.Group className="col-12 col-md-5 col-xl-4"><Form.Label htmlFor="dashboard-account">Dashboard view</Form.Label><Form.Select id="dashboard-account" value={selectedAccountId} onChange={event => { setSelectedAccountId(event.target.value); setTransactionFilters(current => ({ ...current, page: 1 })); }}>
             <option value="">Overall dashboard</option>{accounts.map(account => <option value={account.id} key={account.id}>{account.name} · {account.accountType}</option>)}
           </Form.Select></Form.Group>
-          <Form.Group className="col-12 col-md-4 col-xl-3"><Form.Label>Date range</Form.Label><Form.Select value={preset} onChange={event => choosePreset(event.target.value as Preset)}>
+          <Form.Group className="col-12 col-md-4 col-xl-3"><Form.Label htmlFor="dashboard-range">Date range</Form.Label><Form.Select id="dashboard-range" value={preset} onChange={event => choosePreset(event.target.value as Preset)}>
             <option value="thisMonth">This month</option><option value="lastMonth">Last month</option><option value="last3Months">Last 3 months</option><option value="thisYear">This year</option><option value="allTime">All time</option><option value="custom">Custom range</option>
           </Form.Select></Form.Group>
           {preset === 'custom' && <>
@@ -286,6 +328,10 @@ export default function DashboardPage() {
       </Form>
     </div>
 
+    {!selectedAccountId && <Nav variant="pills" className="dashboard-tabs mb-4" activeKey={tab} onSelect={key => key && chooseTab(key as DashboardTab)} role="tablist" aria-label="Dashboard sections">
+      {tabs.map(item => <Nav.Item key={item.key}><Nav.Link eventKey={item.key} role="tab" aria-selected={tab === item.key}>{item.label}</Nav.Link></Nav.Item>)}
+    </Nav>}
+
     {loading ? <div className="content-card text-center py-5"><Spinner animation="border" role="status"><span className="visually-hidden">Loading dashboard</span></Spinner></div> : overview && <>
       {selectedAccount && accountSummary ? <section className="mb-4" aria-label={`${selectedAccount.name} account summary`}>
         <div className="d-flex justify-content-between align-items-start gap-3 mb-3"><div><div className="eyebrow">ACCOUNT DASHBOARD</div><h2 className="section-title mb-1">{selectedAccount.name}</h2><div className="text-secondary">{selectedAccount.institution} · {selectedAccount.accountType} · {selectedAccount.currency}</div></div><Badge bg={selectedAccount.classification === 'Liability' ? 'warning' : 'success'} text={selectedAccount.classification === 'Liability' ? 'dark' : undefined}>{selectedAccount.classification}</Badge></div>
@@ -296,10 +342,10 @@ export default function DashboardPage() {
           { label: isCreditCard ? 'PURCHASES & CHARGES' : isInvestment ? 'MONEY SPENT' : 'MONEY SPENT', value: money(accountSummary.moneySpent, accountSummary.currency), note: 'Negative movements in this account during the selected period.', tone: 'text-danger' },
           { label: 'TRANSACTIONS', value: String(accountSummary.transactionCount), note: 'Including transfers in this account and date range.', tone: 'text-body' },
         ].map(card => <div className="col-12 col-sm-6 col-xl" key={card.label}><Card className="stat-card h-100"><Card.Body><div className="stat-label">{card.label}</div><div className={`stat-value dashboard-stat-value ${card.tone}`}>{card.value}</div><div className="stat-note">{card.note}</div></Card.Body></Card></div>)}</div>
-      </section> : overview.currencies.map(summary => <SummaryCards key={summary.currency} summary={summary} previousPeriod={previousRange} balances={overview.balanceTotals.find(item => item.currency === summary.currency)} />)}
-      {!overview.currencies.length && !selectedAccount && <div className="empty-state mb-4"><div className="empty-icon">$</div><h3>No financial activity yet</h3><p className="text-secondary mb-0">Add an account and opening balance to start tracking account balances.</p></div>}
+      </section> : tab === 'overview' && overview.currencies.map(summary => <SummaryCards key={summary.currency} summary={summary} previousPeriod={previousRange} balances={overview.balanceTotals.find(item => item.currency === summary.currency)} />)}
+      {!overview.currencies.length && !selectedAccount && tab === 'overview' && <div className="empty-state mb-4"><div className="empty-icon">$</div><h3>No financial activity yet</h3><p className="text-secondary mb-0">Add an account and opening balance to start tracking account balances.</p></div>}
 
-      {!selectedAccount && <div className="content-card p-3 p-md-4 mb-4">
+      {!selectedAccount && tab === 'overview' && <div className="content-card p-3 p-md-4 mb-4">
         <div className="mb-3"><h2 className="section-title">Accounts by type</h2><p className="small text-secondary mb-0">Active accounts and current balances. Accounts without an opening balance are shown as unavailable.</p></div>
         {overview.accounts.length === 0 ? <div className="empty-state"><div className="empty-icon">＋</div><h3>No active accounts</h3><p className="text-secondary mb-0">Add a financial account to see it in this overview.</p></div> : <div className="row g-3">{[
           { type: 'Chequing', label: 'Chequing' }, { type: 'Savings', label: 'Savings' },
@@ -310,29 +356,32 @@ export default function DashboardPage() {
         })}</div>}
       </div>}
 
-      {!selectedAccount && <div className="content-card p-3 p-md-4 mb-4">
-        <div className="mb-3"><h2 className="section-title">Monthly financial insights</h2><p className="small text-secondary mb-0">Savings rate is net cash flow divided by income. It is a cash-flow measure, not a confirmed savings-account deposit. Months follow the selected date range and may be partial.</p></div>
+      {!selectedAccount && tab === 'cashflow' && <div className="content-card p-3 p-md-4 mb-4">
+        <div className="mb-3"><h2 className="section-title">Monthly financial insights</h2><p className="small text-secondary mb-0">Savings rate is net cash flow divided by income — a cash-flow measure, not a savings-account deposit. Months may be partial.</p></div>
         <div className="row g-3">
           <div className="col-12 col-xl-7"><Card className="stat-card h-100"><Card.Body>
             <h3 className="section-title h6">Savings rate by month</h3>
-            <p className="small text-secondary">Selected period: {selectedPeriodSavingsRate === null ? '—' : `${selectedPeriodSavingsRate.toFixed(1)}%`} · Previous period: {previousPeriodSavingsRate === null ? '—' : `${previousPeriodSavingsRate.toFixed(1)}%`}</p>
-            {monthlyInsightRows.length === 0 ? <div className="chart-empty">No monthly income or expense data for this period.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><LineChart data={monthlyInsightRows}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis unit="%" tickLine={false} axisLine={false} /><Tooltip formatter={(value, name) => [value === null ? 'Not available (zero income)' : `${Number(value).toFixed(1)}%`, name]} /><Line type="monotone" dataKey="savingsRatePercent" name="Savings rate" connectNulls={false} stroke="#17845f" strokeWidth={2.5} dot={{ r: 4 }} /></LineChart></ResponsiveContainer></div>}
-            <div className="table-responsive mt-3"><Table size="sm" className="align-middle mb-0"><thead><tr><th>Month</th><th className="text-end">Income</th><th className="text-end">Expenses</th><th className="text-end">Transfers out</th><th className="text-end">Investment</th><th className="text-end">Cash retained*</th><th className="text-end">Net flow</th><th className="text-end">Savings rate</th></tr></thead><tbody>{monthlyInsightRows.map(item => <tr key={item.month}><td>{item.label}</td><td className="text-end">{money(item.income, currency)}</td><td className="text-end">{money(item.expenses, currency)}</td><td className="text-end">{money(item.outgoingTransfers, currency)}</td><td className="text-end">{money(item.investmentContributions, currency)}</td><td className="text-end">{money(item.remainingAfterExpensesAndTransfers, currency)}</td><td className="text-end">{money(item.netCashFlow, currency)}</td><td className="text-end">{item.savingsRatePercent === null ? '—' : `${item.savingsRatePercent.toFixed(1)}%`}</td></tr>)}</tbody></Table></div>
-            <p className="small text-secondary mt-2 mb-0">*Cash retained is income minus expenses and outgoing transfers; it is not a savings-account balance.</p>
+            <p className="small text-secondary">Selected period: <strong className="text-body">{selectedPeriodSavingsRate === null ? '—' : `${selectedPeriodSavingsRate.toFixed(1)}%`}</strong> · Previous period: {previousPeriodSavingsRate === null ? '—' : `${previousPeriodSavingsRate.toFixed(1)}%`}</p>
+            {monthlyInsightRows.length === 0 ? <div className="chart-empty">No monthly income or expense data for this period.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><LineChart data={monthlyInsightRows} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis unit="%" tickLine={false} axisLine={false} /><Tooltip formatter={(value, name) => [value === null ? 'Not available (zero income)' : `${Number(value).toFixed(1)}%`, name]} /><Line type="monotone" dataKey="savingsRatePercent" name="Savings rate" connectNulls={false} stroke="#17845f" strokeWidth={2.5} dot={{ r: 4 }} /></LineChart></ResponsiveContainer></div>}
           </Card.Body></Card></div>
           <div className="col-12 col-xl-5"><Card className="stat-card h-100"><Card.Body>
             <h3 className="section-title h6">Spending changes</h3>
             {categoryChanges.length === 0 ? <p className="small text-secondary">Category comparisons need expense activity in at least two months.</p> : <>
-              <p className="small text-secondary">{monthLabel(categoryChanges[0].previousMonth)} compared with {monthLabel(categoryChanges[0].currentMonth)}</p>
-              <div className="d-flex flex-column gap-2">{categoryChanges.map(item => <div className="d-flex justify-content-between gap-3 border-bottom pb-2" key={item.categoryName}><span className="text-truncate">{item.categoryName}</span><span className={item.change > 0 ? 'text-danger text-nowrap' : 'text-success text-nowrap'}>{item.change > 0 ? '+' : ''}{money(item.change, currency)}</span></div>)}</div>
+              <p className="small text-secondary">{monthLabel(categoryChanges[0].currentMonth)} vs {monthLabel(categoryChanges[0].previousMonth)} · <span className="text-danger">▲ spent more</span> · <span className="text-success">▼ spent less</span></p>
+              <div className="d-flex flex-column gap-2">{categoryChanges.map(item => <div className="d-flex justify-content-between gap-3 border-bottom pb-2" key={item.categoryName}><span className="text-truncate">{item.categoryName}</span><span className={`text-nowrap fw-semibold ${item.change > 0 ? 'text-danger' : item.change < 0 ? 'text-success' : 'text-secondary'}`}>{item.change > 0 ? '▲' : item.change < 0 ? '▼' : '–'} {money(Math.abs(item.change), currency)}</span></div>)}</div>
             </>}
             <h3 className="section-title h6 mt-4">Largest expenses</h3>
             {largestExpenses.length === 0 ? <p className="small text-secondary mb-0">No ordinary expenses in this period.</p> : <div className="d-flex flex-column gap-2">{largestExpenses.map(item => <div className="d-flex justify-content-between gap-3 border-bottom pb-2" key={item.id}><div className="text-truncate"><strong>{item.description}</strong><div className="small text-secondary">{displayDate(item.transactionDate)} · {item.categoryName ?? 'Uncategorized'}</div></div><strong className="text-danger text-nowrap">{money(item.amount, item.currency)}</strong></div>)}</div>}
           </Card.Body></Card></div>
+          {monthlyInsightRows.length > 0 && <div className="col-12"><Card className="stat-card"><Card.Body>
+            <h3 className="section-title h6 mb-3">Month by month</h3>
+            <div className="table-responsive"><Table size="sm" className="align-middle mb-0 insight-table"><thead><tr><th>Month</th><th className="text-end">Income</th><th className="text-end">Expenses</th>{hasOutgoingTransfers && <th className="text-end">Transfers out</th>}{hasInvestments && <th className="text-end">Investment</th>}{hasOutgoingTransfers && <th className="text-end">Cash retained*</th>}<th className="text-end">Net flow</th><th className="text-end">Savings rate</th></tr></thead><tbody>{monthlyInsightRows.map(item => <tr key={item.month}><td>{item.label}</td><td className="text-end text-success">{money(item.income, currency)}</td><td className="text-end text-danger">{money(item.expenses, currency)}</td>{hasOutgoingTransfers && <td className="text-end">{money(item.outgoingTransfers, currency)}</td>}{hasInvestments && <td className="text-end">{money(item.investmentContributions, currency)}</td>}{hasOutgoingTransfers && <td className="text-end">{money(item.remainingAfterExpensesAndTransfers, currency)}</td>}<td className={`text-end fw-semibold ${item.netCashFlow < 0 ? 'text-danger' : ''}`}>{money(item.netCashFlow, currency)}</td><td className="text-end">{item.savingsRatePercent === null ? '—' : `${item.savingsRatePercent.toFixed(1)}%`}</td></tr>)}</tbody></Table></div>
+            {hasOutgoingTransfers && <p className="small text-secondary mt-2 mb-0">*Cash retained is income minus expenses and outgoing transfers; it is not a savings-account balance.</p>}
+          </Card.Body></Card></div>}
         </div>
       </div>}
 
-      {!selectedAccount && <div className="content-card p-3 p-md-4 mb-4">
+      {!selectedAccount && tab === 'balances' && <div className="content-card p-3 p-md-4 mb-4">
         <div className="mb-3"><h2 className="section-title">Cash position</h2><p className="small text-secondary mb-0">Chequing and savings balances are actual account balances from opening balances and recorded movements. Incomplete totals are not estimated.</p></div>
         <div className="table-responsive mb-4"><Table className="align-middle mb-0"><thead><tr><th>Currency</th><th className="text-end">Chequing</th><th className="text-end">Savings</th><th className="text-end">Combined cash</th></tr></thead><tbody>{overview.balanceTotals.map(item => <tr key={item.currency}><th>{item.currency}</th><td className="text-end">{item.chequingAccountCount === 0 ? money(0, item.currency) : item.chequingBalance === null ? 'Incomplete' : money(item.chequingBalance, item.currency)}</td><td className="text-end">{item.savingsAccountCount === 0 ? money(0, item.currency) : item.savingsBalance === null ? 'Incomplete' : money(item.savingsBalance, item.currency)}</td><td className="text-end fw-semibold">{item.cashAccountCount === 0 ? money(0, item.currency) : item.cashBalance === null ? 'Incomplete' : money(item.cashBalance, item.currency)}</td></tr>)}</tbody></Table></div>
         {cashBalanceHistory.length === 0 ? <div className="chart-empty">Cash balance history needs opening balances and dates for every active chequing and savings account in {currency || 'the selected currency'}.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><LineChart data={cashBalanceHistory}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} /><YAxis tickLine={false} axisLine={false} tickFormatter={value => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value))} /><Tooltip formatter={(value, name) => [money(Number(value), currency), name]} /><Legend /><Line type="monotone" dataKey="chequing" name="Chequing cash" stroke="#3176a5" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="savings" name="Savings cash" stroke="#7858a6" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="total" name="Combined cash" stroke="#17845f" strokeWidth={3} dot={false} /></LineChart></ResponsiveContainer></div>}
@@ -350,16 +399,17 @@ export default function DashboardPage() {
 
       {overview.currencies.length > 1 && <div className="d-flex align-items-center gap-2 mb-3"><Form.Label className="mb-0 small text-secondary" htmlFor="dashboard-currency">Charts currency</Form.Label><Form.Select id="dashboard-currency" size="sm" className="dashboard-currency-select" value={currency} onChange={event => setCurrency(event.target.value)}>{overview.currencies.map(item => <option key={item.currency} value={item.currency}>{item.currency}</option>)}</Form.Select></div>}
 
-      <div className="row g-3 mb-4">
+      {(selectedAccount || tab === 'overview') && <div className="row g-3 mb-4">
         <div className={`col-12 ${isInvestment ? '' : 'col-xl-5'}`}><Card className="content-card h-100"><Card.Body>
           <div className="mb-3"><h2 className="section-title">Spending by category</h2><p className="small text-secondary mb-0">Expenses in {currency || 'your selected period'}; transfers excluded</p></div>
           {categoryData.length === 0 ? <div className="chart-empty">No expense data for this currency and date range.</div> : <>
-            <div className="dashboard-donut"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={categoryData} dataKey="amount" nameKey="categoryName" cx="50%" cy="50%" innerRadius="58%" outerRadius="82%" paddingAngle={2}>
+            <div className="dashboard-donut"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={categoryData} dataKey="amount" nameKey="categoryName" cx="50%" cy="50%" innerRadius="62%" outerRadius="86%" paddingAngle={2} stroke="none">
               {categoryData.map((item, index) => <Cell key={`${item.currency}-${item.categoryName}`} fill={chartColors[index % chartColors.length]} />)}
-            </Pie><Tooltip formatter={(value) => money(Number(value), currency)} /><Legend /></PieChart></ResponsiveContainer></div>
+            </Pie><Tooltip formatter={(value) => money(Number(value), currency)} /></PieChart></ResponsiveContainer>
+              <div className="donut-center" aria-hidden="true"><span>Total spent</span><strong>{money(categoryTotal, currency)}</strong></div>
+            </div>
             <div className="category-breakdown">{categoryData.map((item, index) => {
-              const total = categoryData.reduce((sum, entry) => sum + entry.amount, 0);
-              const percentage = total ? item.amount / total * 100 : 0;
+              const percentage = categoryTotal ? item.amount / categoryTotal * 100 : 0;
               return <div className="category-breakdown-row" key={`${item.currency}-${item.categoryName}`}><span className="category-swatch" style={{ backgroundColor: chartColors[index % chartColors.length] }} /><span className="text-truncate">{item.categoryName}</span><span className="text-secondary">{percentage.toFixed(0)}%</span><strong>{money(item.amount, item.currency)}</strong></div>;
             })}</div>
           </>}
@@ -371,18 +421,18 @@ export default function DashboardPage() {
             <Tooltip formatter={(value, name) => [money(Number(value), currency), name]} /><Legend /><Bar dataKey="income" name={selectedAccount && isCreditCard ? 'Credits and refunds' : 'Income'} fill="#17845f" radius={[4, 4, 0, 0]} /><Bar dataKey="expenses" name={selectedAccount && isCreditCard ? 'Purchases' : 'Expenses'} fill="#d87565" radius={[4, 4, 0, 0]} />
           </BarChart></ResponsiveContainer></div>}
         </Card.Body></Card></div>}
-      </div>
+      </div>}
 
-      {!selectedAccount && <div className="row g-3 mb-4">
-        <div className="col-12 col-xl-6"><Card className="content-card h-100"><Card.Body><div className="mb-3"><h2 className="section-title">Monthly cash flow</h2><p className="small text-secondary mb-0">Income minus expenses, and remaining after outgoing transfers. Neither is an account balance.</p></div>
-          {monthlyCashFlowData.length === 0 ? <div className="chart-empty">No monthly cash flow for this currency and date range.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyCashFlowData}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis tickLine={false} axisLine={false} tickFormatter={value => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value))} /><Tooltip formatter={(value, name) => [money(Number(value), currency), name]} /><Legend /><Bar dataKey="netCashFlow" name="Income minus expenses" fill="#17845f" radius={[4, 4, 0, 0]} /><Bar dataKey="remainingAfterExpensesAndTransfers" name="After outgoing transfers" fill="#3176a5" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div>}
+      {!selectedAccount && tab === 'cashflow' && <div className="row g-3 mb-4">
+        <div className="col-12 col-xl-6"><Card className="content-card h-100"><Card.Body><div className="mb-3"><h2 className="section-title">Monthly cash flow</h2><p className="small text-secondary mb-0">{hasOutgoingTransfers ? 'Income minus expenses, and what remained after outgoing transfers. Neither is an account balance.' : 'Income minus expenses each month. This is not an account balance.'}</p></div>
+          {monthlyCashFlowData.length === 0 ? <div className="chart-empty">No monthly cash flow for this currency and date range.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyCashFlowData}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis tickLine={false} axisLine={false} tickFormatter={compactNumber} /><Tooltip formatter={(value, name) => [money(Number(value), currency), name]} />{hasOutgoingTransfers && <Legend />}<Bar dataKey="netCashFlow" name="Income minus expenses" fill="#17845f" radius={[4, 4, 0, 0]} maxBarSize={56}>{monthlyCashFlowData.map(item => <Cell key={item.month} fill={item.netCashFlow < 0 ? '#d87565' : '#17845f'} />)}</Bar>{hasOutgoingTransfers && <Bar dataKey="remainingAfterExpensesAndTransfers" name="After outgoing transfers" fill="#3176a5" radius={[4, 4, 0, 0]} maxBarSize={56} />}</BarChart></ResponsiveContainer></div>}
         </Card.Body></Card></div>
-        <div className="col-12 col-xl-6"><Card className="content-card h-100"><Card.Body><div className="mb-3"><h2 className="section-title">Monthly income distribution</h2><p className="small text-secondary mb-0">Expenses and outgoing transfers are shown once, at the sending account. Remaining cash flow is not savings-account balance.</p></div>
-          {monthlyCashFlowData.length === 0 ? <div className="chart-empty">No monthly distribution for this currency and date range.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyCashFlowData}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis tickLine={false} axisLine={false} tickFormatter={value => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value))} /><Tooltip formatter={(value, name) => [money(Number(value), currency), name]} /><Legend /><Bar dataKey="expenses" name="Ordinary expenses" stackId="distribution" fill="#d87565" /><Bar dataKey="transfersToOtherAccounts" name="Other account transfers" stackId="distribution" fill="#3176a5" /><Bar dataKey="investmentContributions" name="Investment contributions" stackId="distribution" fill="#7858a6" /><Bar dataKey="remainingAfterExpensesAndTransfers" name="Remaining after expenses/transfers" stackId="distribution" fill="#17845f" /></BarChart></ResponsiveContainer></div>}
+        <div className="col-12 col-xl-6"><Card className="content-card h-100"><Card.Body><div className="mb-3"><h2 className="section-title">Where income went</h2><p className="small text-secondary mb-0">Each month's income split into expenses{hasOtherTransfers || hasInvestments ? ', transfers' : ''} and what remained.</p></div>
+          {monthlyCashFlowData.length === 0 ? <div className="chart-empty">No monthly distribution for this currency and date range.</div> : <div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyCashFlowData}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} /><YAxis tickLine={false} axisLine={false} tickFormatter={compactNumber} /><Tooltip formatter={(value, name) => [money(Number(value), currency), name]} /><Legend /><Bar dataKey="expenses" name="Expenses" stackId="distribution" fill="#d87565" maxBarSize={56} />{hasOtherTransfers && <Bar dataKey="transfersToOtherAccounts" name="Transfers to other accounts" stackId="distribution" fill="#3176a5" maxBarSize={56} />}{hasInvestments && <Bar dataKey="investmentContributions" name="Investment contributions" stackId="distribution" fill="#7858a6" maxBarSize={56} />}<Bar dataKey="remainingAfterExpensesAndTransfers" name="Remaining" stackId="distribution" fill="#17845f" radius={[4, 4, 0, 0]} maxBarSize={56} /></BarChart></ResponsiveContainer></div>}
         </Card.Body></Card></div>
       </div>}
 
-      {!selectedAccount && <div className="content-card p-3 p-md-4 mb-4"><div className="mb-3"><h2 className="section-title">Account balance trends</h2><p className="small text-secondary mb-0">Each account and currency is charted separately. Credit card lines show outstanding liabilities.</p></div>
+      {!selectedAccount && tab === 'balances' && <div className="content-card p-3 p-md-4 mb-4"><div className="mb-3"><h2 className="section-title">Account balance trends</h2><p className="small text-secondary mb-0">Each account and currency is charted separately. Credit card lines show outstanding liabilities.</p></div>
         {accountBalanceTrends.length === 0 ? <div className="chart-empty">No balance trends are available. Configure opening balances for active accounts to track them.</div> : <div className="row g-3">{accountBalanceTrends.map(trend => <div className="col-12 col-xl-6" key={trend.accountId}><Card className="stat-card h-100"><Card.Body><div className="d-flex justify-content-between align-items-start gap-2 mb-2"><div><h3 className="section-title h6 mb-1">{trend.accountName}</h3><div className="small text-secondary">{trend.accountType} · {trend.currency}</div></div><Badge bg={trend.classification === 'Liability' ? 'warning' : 'success'} text={trend.classification === 'Liability' ? 'dark' : undefined}>{trend.classification === 'Liability' ? 'Liability' : 'Asset'}</Badge></div><div className="dashboard-bar"><ResponsiveContainer width="100%" height="100%"><LineChart data={trend.points.map(point => ({ ...point, label: displayDate(point.date) }))}><CartesianGrid stroke="#edf1ef" vertical={false} /><XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={24} /><YAxis tickLine={false} axisLine={false} tickFormatter={value => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value))} /><Tooltip formatter={value => money(Number(value), trend.currency)} /><Line type="monotone" dataKey="balance" name={trend.classification === 'Liability' ? 'Outstanding liability' : 'Account balance'} stroke={trend.classification === 'Liability' ? '#d87565' : '#17845f'} strokeWidth={2.5} dot={trend.points.length < 24} /></LineChart></ResponsiveContainer></div><Button size="sm" variant="link" className="px-0 mt-2" onClick={() => setSelectedAccountId(trend.accountId)}>Open account dashboard</Button></Card.Body></Card></div>)}</div>}
       </div>}
 
@@ -403,7 +453,7 @@ export default function DashboardPage() {
         </> : <div className="chart-empty">No transactions match this account and filter.</div>}
       </div> : null}
 
-      {!selectedAccount && <div className="content-card p-3 p-md-4">
+      {!selectedAccount && tab === 'overview' && <div className="content-card p-3 p-md-4">
         <div className="d-flex justify-content-between align-items-center gap-3 mb-3"><div><h2 className="section-title">Recent transactions</h2><p className="small text-secondary mb-0">Saved transactions in the selected period</p></div><Link to="/transactions" className="btn btn-outline-dark btn-sm">View all</Link></div>
         {overview.recentTransactions.length === 0 ? <div className="empty-state"><div className="empty-icon">↔</div><h3>{hasTransactions ? 'No transactions in this period' : 'No saved transactions yet'}</h3><p className="text-secondary mb-3">The dashboard uses saved transactions only. CSV previews are not included.</p><Link to="/transactions" className="btn btn-outline-dark">Add a transaction manually</Link></div> : <Table responsive hover className="align-middle mb-0">
           <thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Category</th><th className="text-end">Amount</th><th>Type</th></tr></thead><tbody>{overview.recentTransactions.map(transaction => <RecentTransactionRow key={transaction.id} transaction={transaction} />)}</tbody>
