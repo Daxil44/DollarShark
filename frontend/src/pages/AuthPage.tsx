@@ -34,9 +34,26 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
     }
   }
 
-  return <main className="auth-background"><Container className="auth-container">
+  return <main className="auth-split">
+    <aside className="auth-aside" aria-hidden="true">
+      <Link to="/" className="auth-aside-logo" tabIndex={-1}><DollarSharkLogo /></Link>
+      <div className="auth-aside-copy">
+        <h2>{isRegister ? 'Start swimming toward clearer finances.' : 'Good to see you again.'}</h2>
+        <p>Import statements, catch duplicates, link transfers, and see where every dollar goes.</p>
+      </div>
+      <div className="auth-aside-art">
+        <div className="auth-mini-card">
+          <small>Net cash flow</small><strong>+$2,370.00</strong>
+          <svg viewBox="0 0 200 60" preserveAspectRatio="none"><path d="M0 50 C30 46 50 48 70 38 S110 30 130 26 S170 14 200 8" /></svg>
+        </div>
+        <div className="auth-mini-card small-card"><span className="tick">✓</span>3 duplicates skipped</div>
+      </div>
+      <ul className="auth-aside-points"><li>No bank passwords</li><li>Private to your account</li><li>CSV preview before import</li></ul>
+    </aside>
+    <section className="auth-main"><Container className="auth-container">
+    <Link to="/" className="auth-back">← Back to home</Link>
     <Card className="auth-card"><Card.Body>
-      <div className="brand mb-4"><DollarSharkLogo /></div>
+      <Link to="/" className="brand mb-4 d-inline-flex" aria-label="DollarShark home"><DollarSharkLogo /></Link>
       <h1 className="h3 fw-bold">{isRegister ? 'Create your account' : 'Welcome back'}</h1>
       <p className="text-secondary">{isRegister ? 'Your finance data will be private to your account.' : 'Sign in to see your private finance workspace.'}</p>
       {error && <Alert variant="danger">{error}</Alert>}
@@ -50,5 +67,5 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
       <div className="text-center mt-3 small">{isRegister ? <>Already registered? <Link to="/login">Sign in</Link></> : <>New to DollarShark? <Link to="/register">Create an account</Link></>}</div>
       {isRegister && <div className="small text-secondary mt-3">Email confirmation and password recovery are not available yet. Use a unique password.</div>}
     </Card.Body></Card>
-  </Container></main>;
+  </Container></section></main>;
 }

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dollarshark-api",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "backend/DollarShark.Api", "--launch-profile", "http"],
+      "port": 5017
+    }
+  ]
+}

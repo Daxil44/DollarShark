@@ -48,3 +48,45 @@ footer { margin: 3rem 0 1.5rem; text-align:center; color:#87938f; font-size:.8re
 footer span { padding: 0 .3rem; }
 @media (max-width: 576px) { .main-content { padding-top: 2rem; } .page-heading h1 { font-size:1.7rem; } .page-heading { align-items:flex-start; flex-direction:column; } }
 @media (max-width: 991px) { .user-controls { align-items:flex-start; flex-direction:column; padding:.8rem 0; } }
+
+/* Auth: split layout */
+.auth-split { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); background: #f3f7f5; }
+.auth-aside { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 2rem; padding: 2.5rem 3rem; color: #eaf7f1; background: radial-gradient(700px 380px at 100% 0%, rgba(72,199,142,.25), transparent 60%), linear-gradient(160deg, #0b252b, #0d2e35 50%, #11473f); }
+.auth-aside::after { content: ''; position: absolute; inset: 0; background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 40px 40px; mask-image: radial-gradient(ellipse at 60% 40%, #000 25%, transparent 75%); pointer-events: none; }
+.auth-aside > * { position: relative; z-index: 1; }
+.auth-aside-logo { text-decoration: none; }
+.auth-aside .dollarshark-wordmark { color: #fff; }
+.auth-aside-copy { margin-top: auto; }
+.auth-aside-copy h2 { font-size: clamp(1.7rem, 2.6vw, 2.4rem); font-weight: 800; letter-spacing: -.04em; line-height: 1.1; }
+.auth-aside-copy p { color: #b4cec7; font-size: 1.02rem; line-height: 1.6; max-width: 26rem; margin: .8rem 0 0; }
+.auth-aside-art { position: relative; height: 170px; }
+.auth-mini-card { position: absolute; left: 0; top: 0; width: min(320px, 90%); padding: 1rem 1.1rem; border-radius: 16px; background: #fff; color: #172c2b; box-shadow: 0 24px 50px rgba(0,0,0,.3); }
+.auth-mini-card small { display: block; color: #7b8c88; font-size: .68rem; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+.auth-mini-card strong { font-size: 1.5rem; color: #16845d; letter-spacing: -.03em; }
+.auth-mini-card svg { width: 100%; height: 46px; display: block; margin-top: .3rem; }
+.auth-mini-card path { fill: none; stroke: #16845d; stroke-width: 3; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.auth-mini-card.small-card { left: auto; right: 0; top: auto; bottom: 0; width: auto; display: flex; align-items: center; gap: .55rem; padding: .65rem .9rem; font-size: .85rem; font-weight: 650; animation: auth-float 6s ease-in-out infinite; }
+.auth-mini-card .tick { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; background: #e3f6ed; color: #16845d; font-weight: 800; }
+.auth-aside-points { list-style: none; padding: 0; margin: 0 0 .5rem; display: flex; flex-wrap: wrap; gap: .4rem 1.3rem; color: #9fbdb5; font-size: .88rem; }
+.auth-aside-points li::before { content: '✓'; color: #48c78e; font-weight: 800; margin-right: .4rem; }
+.auth-main { display: grid; place-items: center; padding: 2rem 1rem; }
+.auth-back { display: inline-block; margin-bottom: .9rem; color: #5d6f6c; font-size: .9rem; font-weight: 600; text-decoration: none; }
+.auth-back:hover { color: #167553; }
+.auth-card .brand { text-decoration: none; }
+@keyframes auth-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@media (prefers-reduced-motion: reduce) { .auth-mini-card.small-card { animation: none; } }
+@media (max-width: 991px) { .auth-split { grid-template-columns: 1fr; } .auth-aside { display: none; } }
+
+/* Dashboard tabs & charts */
+.dashboard-tabs { gap: .35rem; padding: .3rem; background: #fff; border: 1px solid #e5ece9; border-radius: 12px; display: inline-flex; flex-wrap: wrap; }
+.dashboard-tabs .nav-link { color: #5d6f6c; font-weight: 600; border-radius: 9px; padding: .45rem 1rem; }
+.dashboard-tabs .nav-link:hover { color: #167553; background: #f1f7f4; }
+.dashboard-tabs .nav-link.active { background: #183f39; color: #fff; }
+.dashboard-donut { position: relative; }
+.donut-center { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; pointer-events: none; }
+.donut-center span { color: #7b8986; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.donut-center strong { font-size: 1.15rem; letter-spacing: -.03em; }
+.stat-compare { display: flex; flex-wrap: wrap; gap: .2rem .5rem; margin-top: .35rem; font-size: .85rem; }
+.stat-delta { font-weight: 700; }
+.insight-table th { font-size: .78rem; color: #6c817b; font-weight: 700; white-space: nowrap; }
+.insight-table td { white-space: nowrap; }
