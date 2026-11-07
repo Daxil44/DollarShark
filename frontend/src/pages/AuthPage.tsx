@@ -1,9 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Alert, Button, Form, Spinner } from 'react-bootstrap';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api, apiErrorMessage } from '../api';
 import { isEmailNotConfirmed, useAuth } from '../auth';
-import AuthLayout, { MailIcon, passwordHint } from '../components/AuthLayout';
+import AuthLayout, { GoogleButton, MailIcon, passwordHint } from '../components/AuthLayout';
 
 export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const { user, login, register } = useAuth();
@@ -20,6 +20,16 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const from = (location.state as { from?: string | { pathname?: string; search?: string; hash?: string } } | null)?.from;
   const destination = typeof from === 'string' ? from : from?.pathname ? `${from.pathname}${from.search ?? ''}${from.hash ?? ''}` : '/dashboard';
   const notice = (location.state as { notice?: string } | null)?.notice;
+  const googleFailed = new URLSearchParams(location.search).get('error') === 'google';
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api.get<{ google: boolean }>('/api/auth/providers')
+      .then(response => { if (active) setGoogleEnabled(response.data.google); })
+      .catch(() => { if (active) setGoogleEnabled(false); });
+    return () => { active = false; };
+  }, []);
 
   if (user) return <Navigate to={destination === '/login' || destination === '/register' ? '/dashboard' : destination} replace />;
 
@@ -74,6 +84,8 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
     <h1 className="h3 fw-bold">{isRegister ? 'Create your account' : 'Welcome back'}</h1>
     <p className="text-secondary">{isRegister ? 'Your finance data will be private to your account.' : 'Sign in to see your private finance workspace.'}</p>
     {notice && !error && !unconfirmed && <Alert variant="success">{notice}</Alert>}
+    {googleFailed && !error && <Alert variant="danger">Google sign-in didn't complete. Try again, or use your email and password.</Alert>}
+    {googleEnabled && <GoogleButton href={`${api.defaults.baseURL}/api/auth/external/google`} />}
     {error && <Alert variant="danger">{error}</Alert>}
     {unconfirmed && <Alert variant="warning">
       <div className="fw-semibold mb-1">Confirm your email first</div>

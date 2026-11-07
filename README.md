@@ -75,6 +75,26 @@ dotnet user-secrets set "Email:FromAddress" "you@gmail.com" --project backend/Do
 
 Gmail only sends as the signed-in address (or a verified alias), and personal accounts are limited to roughly 500 emails per day, which is fine for testing and small launches. For a public launch, the same SMTP settings work with a transactional provider (Amazon SES, SendGrid, Postmark, Mailgun) and your own domain. In production set these as environment variables (for example `Email__Smtp__Password`) and set `Auth:FrontendBaseUrl` if links should point somewhere other than `FrontendOrigin`.
 
+## Continue with Google (optional)
+
+The "Continue with Google" button only appears when a Google Client ID and Secret are configured; without them the app behaves exactly as before.
+
+1. Go to https://console.cloud.google.com/, create a project (for example "DollarShark").
+2. **APIs & Services → OAuth consent screen**: choose *External*, enter the app name, support email and developer email. The default scopes (`openid`, `email`, `profile`) are enough and need no Google review. While the app is in *Testing* mode, add your own Google account under *Test users*.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID**: type *Web application*. Under *Authorized redirect URIs* add `http://localhost:5017/signin-google` (and later `https://<your-api-domain>/signin-google` for production).
+4. Store the values in User Secrets:
+
+~~~powershell
+dotnet user-secrets set "Authentication:Google:ClientId" "<client-id>.apps.googleusercontent.com" --project backend/DollarShark.Api
+dotnet user-secrets set "Authentication:Google:ClientSecret" "<client-secret>" --project backend/DollarShark.Api
+~~~
+
+Restart the API. How accounts are matched:
+- First Google sign-in with a new email creates a confirmed account with no password (the user can always use Google, or use *Forgot password?* to add one).
+- If a **confirmed** account already has that email, Google is linked to it.
+- If an **unconfirmed** account has that email, its password is removed before linking, because whoever registered it never proved they own the address. This blocks "pre-registration" account takeovers.
+- Google accounts whose email Google has not verified are refused.
+
 ## Statement uploads
 
 - `POST /api/statements` accepts multipart `financialAccountId` and `file` fields. `GET /api/statements?page=1&pageSize=25`, `GET /api/statements/{id}`, and `DELETE /api/statements/{id}` manage the signed-in user's metadata and files. There is no download endpoint.

@@ -1,5 +1,7 @@
 using System.ComponentModel.DataAnnotations;
+using System.Security.Claims;
 using System.Text;
+using Microsoft.AspNetCore.Authentication;
 using DollarShark.Api.Email;
 using DollarShark.Infrastructure.Identity;
 using Microsoft.AspNetCore.Antiforgery;
@@ -29,9 +31,71 @@ public sealed class AuthController(
     IAntiforgery antiforgery,
     EmailQueue emailQueue,
     IOptions<AccountAuthOptions> authOptions,
+    IAuthenticationSchemeProvider schemes,
     ILogger<AuthController> logger) : ApiControllerBase
 {
     public const string EmailRateLimitPolicy = "auth-email";
+    public const string GoogleScheme = "Google";
+    public const string GoogleEmailVerifiedClaim = "urn:google:email_verified";
+
+    [HttpGet("providers")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Providers() =>
+        Ok(new { google = await schemes.GetSchemeAsync(GoogleScheme) is not null });
+
+    [HttpGet("external/google")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GoogleSignIn()
+    {
+        if (await schemes.GetSchemeAsync(GoogleScheme) is null) return NotFound();
+        var properties = signInManager.ConfigureExternalAuthenticationProperties(GoogleScheme, Url.Action(nameof(GoogleCallback)));
+        return Challenge(properties, GoogleScheme);
+    }
+
+    [HttpGet("external/google/callback")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GoogleCallback()
+    {
+        var info = await signInManager.GetExternalLoginInfoAsync();
+        if (info is null) return RedirectToFrontend("/login?error=google");
+        try
+        {
+            // Returning user who already linked Google.
+            var existing = await signInManager.ExternalLoginSignInAsync(info.LoginProvider, info.ProviderKey, isPersistent: false, bypassTwoFactor: true);
+            if (existing.Succeeded) return RedirectToFrontend("/dashboard");
+            if (existing.IsLockedOut || existing.IsNotAllowed) return RedirectToFrontend("/login?error=google");
+
+            var email = info.Principal.FindFirstValue(ClaimTypes.Email)?.Trim();
+            var verified = string.Equals(info.Principal.FindFirstValue(GoogleEmailVerifiedClaim), "true", StringComparison.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(email) || !verified) return RedirectToFrontend("/login?error=google");
+
+            var user = await users.FindByEmailAsync(email);
+            if (user is null)
+            {
+                user = new ApplicationUser { UserName = email, Email = email, EmailConfirmed = true };
+                if (!(await users.CreateAsync(user)).Succeeded) return RedirectToFrontend("/login?error=google");
+            }
+            else if (!user.EmailConfirmed)
+            {
+                // Someone may have pre-registered this address without owning it. Google proves ownership,
+                // so drop any password set by that unconfirmed sign-up before linking.
+                if (await users.HasPasswordAsync(user)) await users.RemovePasswordAsync(user);
+                user.EmailConfirmed = true;
+                await users.UpdateAsync(user);
+                await users.UpdateSecurityStampAsync(user);
+            }
+
+            if (!(await users.AddLoginAsync(user, info)).Succeeded) return RedirectToFrontend("/login?error=google");
+            await signInManager.SignInAsync(user, isPersistent: false);
+            return RedirectToFrontend("/dashboard");
+        }
+        finally
+        {
+            await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
+        }
+    }
+
+    private RedirectResult RedirectToFrontend(string path) => Redirect(authOptions.Value.FrontendBaseUrl.TrimEnd('/') + path);
     private const string EmailNotConfirmedCode = "email_not_confirmed";
 
     [HttpGet("csrf")]

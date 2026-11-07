@@ -9,6 +9,7 @@ using System.Threading.RateLimiting;
 using DollarShark.Api.Controllers;
 using DollarShark.Api.Email;
 using DollarShark.Api.Security;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.RateLimiting;
 using DollarShark.Infrastructure.Identity;
 using DollarShark.Infrastructure.Persistence;
@@ -123,6 +124,24 @@ if (string.IsNullOrWhiteSpace(allowedFrontendOrigin) || !Uri.TryCreate(allowedFr
     throw new InvalidOperationException("Configure ViteOrigin for development or FrontendOrigin for production as one exact absolute URL.");
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(parsedFrontendOrigin.GetLeftPart(UriPartial.Authority)).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
+
+// Optional "Continue with Google". Enabled only when both values are configured (User Secrets / environment).
+var googleClientId = builder.Configuration["Authentication:Google:ClientId"];
+var googleClientSecret = builder.Configuration["Authentication:Google:ClientSecret"];
+if (!string.IsNullOrWhiteSpace(googleClientId) && !string.IsNullOrWhiteSpace(googleClientSecret))
+{
+    builder.Services.AddAuthentication().AddGoogle(options =>
+    {
+        options.ClientId = googleClientId;
+        options.ClientSecret = googleClientSecret;
+        options.SignInScheme = IdentityConstants.ExternalScheme;
+        // Google returns with a top-level GET redirect, so Lax is enough and also works on http://localhost.
+        options.CorrelationCookie.SameSite = SameSiteMode.Lax;
+        options.CorrelationCookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
+        options.ClaimActions.MapJsonKey(AuthController.GoogleEmailVerifiedClaim, "verified_email");
+        options.ClaimActions.MapJsonKey(AuthController.GoogleEmailVerifiedClaim, "email_verified");
+    });
+}
 
 // Account emails (confirmation + password reset).
 builder.Services.Configure<AccountAuthOptions>(builder.Configuration.GetSection("Auth"));
