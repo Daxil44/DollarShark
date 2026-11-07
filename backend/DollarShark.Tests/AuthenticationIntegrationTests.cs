@@ -346,6 +346,7 @@ public sealed class AuthenticationIntegrationTests
             // These tests cover session/ownership behaviour; email confirmation has its own test class.
             builder.UseSetting("Auth:RequireConfirmedEmail", "false");
             builder.UseSetting("RateLimiting:AuthEmail:PermitLimit", "1000");
+            builder.UseSetting("RateLimiting:Login:PermitLimit", "1000");
             if (environment == "Production")
             {
                 builder.UseSetting("FrontendOrigin", "https://app.example.test");

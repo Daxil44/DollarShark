@@ -703,6 +703,7 @@ public sealed class StatementIntegrationTests
             builder.ConfigureLogging(logging => logging.ClearProviders());
             builder.UseSetting("Auth:RequireConfirmedEmail", "false");
             builder.UseSetting("RateLimiting:AuthEmail:PermitLimit", "1000");
+            builder.UseSetting("RateLimiting:Login:PermitLimit", "1000");
             builder.UseSetting("StatementStorage:RootPath", StorageRoot);
             builder.UseSetting("StatementStorage:MaxFileSizeBytes", maxFileSizeBytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.ConfigureServices(services =>

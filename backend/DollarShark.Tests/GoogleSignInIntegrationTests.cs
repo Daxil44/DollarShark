@@ -162,6 +162,7 @@ public sealed class GoogleSignInIntegrationTests
             builder.ConfigureLogging(logging => logging.ClearProviders());
             builder.UseSetting("ViteOrigin", "https://app.example.test");
             builder.UseSetting("RateLimiting:AuthEmail:PermitLimit", "1000");
+            builder.UseSetting("RateLimiting:Login:PermitLimit", "1000");
             if (configureGoogle)
             {
                 builder.UseSetting("Authentication:Google:ClientId", "test-client-id");

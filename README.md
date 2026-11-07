@@ -55,6 +55,8 @@ Open http://localhost:5173. The checked-in development environment file points t
 - Confirmation and reset links point at the frontend (`/confirm-email`, `/reset-password`) and expire after 3 hours. Reset links are single-use, a successful reset also confirms the email and clears any lockout, and links carry the user ID rather than the email address.
 - Forgot-password and resend-confirmation always return the same response, so they cannot be used to discover registered emails. Emails are queued and sent in the background.
 - Register, resend, forgot-password, and reset-password are rate limited per IP (default 5 requests per 15 minutes; `RateLimiting:AuthEmail:PermitLimit` and `RateLimiting:AuthEmail:WindowMinutes`).
+- Sign-in (`POST /api/auth/login`) is rate limited per IP with a sliding window (default 10 attempts per 5 minutes; `RateLimiting:Login:PermitLimit` and `RateLimiting:Login:WindowMinutes`). This complements account lockout (5 wrong passwords locks that account for 15 minutes): lockout protects one account, the IP limit stops one source guessing across many accounts. Rejected requests get `429 Too Many Requests` with a `Retry-After` header and a message saying how long to wait.
+- Limits are keyed by the client IP the API sees. Behind a reverse proxy or load balancer, configure forwarded headers first; otherwise every user shares the proxy's IP and therefore one limit.
 - **Development default:** with no SMTP settings, emails are not sent. They are written to the API log as `DEVELOPMENT EMAIL (not sent)` including the link, so you can copy it. This `Log` provider is refused outside Development.
 - Existing accounts: the `Phase7ConfirmExistingUserEmails` migration marks accounts created before this feature as confirmed so nobody is locked out. Apply it with the usual `database update` command.
 - `Auth:RequireConfirmedEmail` (default `true`) can be set to `false` for a private single-user install without email; registration then signs in immediately as before.
@@ -112,7 +114,7 @@ Restart the API. How accounts are matched:
 - Optional `StatementCsv:MaxRows` defaults to 10,000 (permitted configuration range 1–100,000). Parsing also enforces the configured statement file-size limit. Invalid values and wrong-width rows are returned with row diagnostics; empty files, invalid UTF-8, malformed quoting, missing/ambiguous columns, and limit violations return a clear error.
 - PDF and XLSX uploads remain stored but cannot be preview-parsed. CSV previews are temporary responses; they are not persisted.
 
-Registration requires email confirmation and supports password reset (see above). MFA and rate limiting on sign-in itself are not implemented yet. Configure HTTPS, a production data-protection key store, exact frontend origin, database backups, and monitoring before exposing it publicly.
+Registration requires email confirmation and supports password reset (see above). Sign-in is rate limited per IP; MFA is not implemented yet. Configure HTTPS, a production data-protection key store, exact frontend origin, database backups, and monitoring before exposing it publicly.
 
 To create optional demo data for your own account, replace the email placeholder in `docs/sample-data.sql` with the email you registered, then run the script against the DollarShark database. It adds a sample account, private category, and three transactions; rerunning it does not duplicate those sample transactions.
 

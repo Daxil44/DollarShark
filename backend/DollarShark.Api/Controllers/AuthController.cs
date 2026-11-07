@@ -35,6 +35,7 @@ public sealed class AuthController(
     ILogger<AuthController> logger) : ApiControllerBase
 {
     public const string EmailRateLimitPolicy = "auth-email";
+    public const string LoginRateLimitPolicy = "auth-login";
     public const string GoogleScheme = "Google";
     public const string GoogleEmailVerifiedClaim = "urn:google:email_verified";
 
@@ -145,6 +146,7 @@ public sealed class AuthController(
 
     [HttpPost("login")]
     [AllowAnonymous]
+    [EnableRateLimiting(LoginRateLimitPolicy)]
     public async Task<IActionResult> Login(LoginRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrEmpty(request.Password))

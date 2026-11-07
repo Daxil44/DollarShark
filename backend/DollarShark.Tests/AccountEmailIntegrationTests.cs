@@ -125,6 +125,30 @@ public sealed class AccountEmailIntegrationTests
     }
 
     [Fact]
+    public async Task SignInAttemptsAreRateLimitedPerClientEvenWithTheRightPassword()
+    {
+        await using var factory = new EmailApiFactory(loginPermitLimit: 3);
+        using var client = factory.CreateClient();
+        await Post(client, "/api/auth/register", new { email = "limited@example.test", password = Password });
+        var (userId, token) = ReadLink(await factory.Emails.WaitFor("limited@example.test", "Confirm"), "/confirm-email");
+        await Post(client, "/api/auth/confirm-email", new { userId, token });
+
+        // Guesses spread across different accounts: lockout alone would never trigger here.
+        foreach (var email in new[] { "a@example.test", "b@example.test", "c@example.test" })
+            Assert.Equal(HttpStatusCode.Unauthorized, (await Post(client, "/api/auth/login", new { email, password = "Guess123!abc" })).StatusCode);
+
+        var limited = await Post(client, "/api/auth/login", new { email = "limited@example.test", password = Password });
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.True(int.Parse(limited.Headers.GetValues("Retry-After").Single(), System.Globalization.CultureInfo.InvariantCulture) > 0);
+        Assert.Contains("Please wait about", await limited.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/auth/me")).StatusCode);
+
+        // Other endpoints are not affected by the sign-in limit.
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/auth/csrf")).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await Post(client, "/api/auth/forgot-password", new { email = "limited@example.test" })).StatusCode);
+    }
+
+    [Fact]
     public async Task LogEmailProviderIsRefusedOutsideDevelopment()
     {
         await using var factory = new EmailApiFactory(environment: "Production");
@@ -181,7 +205,7 @@ public sealed class AccountEmailIntegrationTests
         }
     }
 
-    private sealed class EmailApiFactory(string environment = "Development", int permitLimit = 1000) : WebApplicationFactory<Program>
+    private sealed class EmailApiFactory(string environment = "Development", int permitLimit = 1000, int loginPermitLimit = 1000) : WebApplicationFactory<Program>
     {
         private readonly SqliteConnection connection = OpenConnection();
         private int initialized;
@@ -213,6 +237,7 @@ public sealed class AccountEmailIntegrationTests
             builder.UseSetting("ViteOrigin", "https://app.example.test");
             builder.UseSetting("Email:Provider", "Log");
             builder.UseSetting("RateLimiting:AuthEmail:PermitLimit", permitLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            builder.UseSetting("RateLimiting:Login:PermitLimit", loginPermitLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.ConfigureServices(services =>
             {
                 services.AddDataProtection().UseEphemeralDataProtectionProvider();

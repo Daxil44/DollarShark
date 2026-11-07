@@ -182,6 +182,8 @@ builder.Services.AddHostedService<EmailDispatchService>();
 // Limit endpoints that send email so they cannot be used to flood an inbox or exhaust the mail quota.
 var emailPermitLimit = builder.Configuration.GetValue("RateLimiting:AuthEmail:PermitLimit", 5);
 var emailWindowMinutes = builder.Configuration.GetValue("RateLimiting:AuthEmail:WindowMinutes", 15);
+var loginPermitLimit = builder.Configuration.GetValue("RateLimiting:Login:PermitLimit", 10);
+var loginWindowMinutes = builder.Configuration.GetValue("RateLimiting:Login:WindowMinutes", 5);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -193,13 +195,28 @@ builder.Services.AddRateLimiter(options =>
             Window = TimeSpan.FromMinutes(Math.Max(1, emailWindowMinutes)),
             QueueLimit = 0,
         }));
+    // Sign-in attempts per IP. Account lockout already protects one account from repeated guesses;
+    // this stops one source from guessing across many accounts (credential stuffing / password spraying)
+    // and from burning CPU on password hashing. A sliding window avoids a burst right at each window reset.
+    options.AddPolicy(AuthController.LoginRateLimitPolicy, context => RateLimitPartition.GetSlidingWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new SlidingWindowRateLimiterOptions
+        {
+            PermitLimit = Math.Max(1, loginPermitLimit),
+            Window = TimeSpan.FromMinutes(Math.Max(1, loginWindowMinutes)),
+            SegmentsPerWindow = Math.Max(1, loginWindowMinutes),
+            QueueLimit = 0,
+        }));
     options.OnRejected = async (context, cancellationToken) =>
     {
+        var wait = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter) ? retryAfter : TimeSpan.FromMinutes(1);
+        var minutes = Math.Max(1, (int)Math.Ceiling(wait.TotalMinutes));
+        context.HttpContext.Response.Headers.RetryAfter = ((int)Math.Ceiling(wait.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
         context.HttpContext.Response.ContentType = "application/problem+json";
         await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
         {
             Status = StatusCodes.Status429TooManyRequests,
-            Title = "Too many requests. Please wait a few minutes and try again.",
+            Title = $"Too many requests. Please wait about {minutes} minute{(minutes == 1 ? "" : "s")} and try again.",
         }, cancellationToken);
     };
 });
