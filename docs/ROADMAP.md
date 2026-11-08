@@ -29,9 +29,9 @@ Hosting choice: **AWS Lightsail + Docker Compose + SQL Server Express container 
 ### Stage 1 — Launch hardening (code)
 
 **Security and reliability**
-- [ ] Production HTTPS and hosting setup: HTTPS redirect + HSTS, persisted login-cookie (data-protection) keys, forwarded headers for running behind Nginx/a load balancer, exact `FrontendOrigin`
-- [ ] Global error handling: `UseExceptionHandler` + ProblemDetails on the API (no stack traces); React error boundary so one failing chart doesn't blank the page
-- [ ] Rate limit on statement upload
+- [x] Production HTTPS and hosting setup: HTTPS redirect + HSTS, persisted login-cookie (data-protection) keys, forwarded headers for running behind Nginx/a load balancer, exact `FrontendOrigin`
+- [x] Global error handling: `UseExceptionHandler` + ProblemDetails on the API (no stack traces); React error boundary so one failing chart doesn't blank the page
+- [x] Rate limit on statement upload
 - [ ] Delete my account: remove the user's data and stored statement files (PIPEDA)
 
 **Product**

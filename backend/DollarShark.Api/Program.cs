@@ -5,7 +5,10 @@ using DollarShark.Application.Dashboard;
 using DollarShark.Application.Transactions;
 using DollarShark.Application.Transfers;
 using DollarShark.Application.Statements;
+using System.Net;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using DollarShark.Api.Controllers;
 using DollarShark.Api.Email;
 using DollarShark.Api.Security;
@@ -186,6 +189,8 @@ var emailPermitLimit = builder.Configuration.GetValue("RateLimiting:AuthEmail:Pe
 var emailWindowMinutes = builder.Configuration.GetValue("RateLimiting:AuthEmail:WindowMinutes", 15);
 var loginPermitLimit = builder.Configuration.GetValue("RateLimiting:Login:PermitLimit", 10);
 var loginWindowMinutes = builder.Configuration.GetValue("RateLimiting:Login:WindowMinutes", 5);
+var uploadPermitLimit = builder.Configuration.GetValue("RateLimiting:Upload:PermitLimit", 30);
+var uploadWindowMinutes = builder.Configuration.GetValue("RateLimiting:Upload:WindowMinutes", 60);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -209,6 +214,17 @@ builder.Services.AddRateLimiter(options =>
             SegmentsPerWindow = Math.Max(1, loginWindowMinutes),
             QueueLimit = 0,
         }));
+    // Statement uploads per signed-in user (IP as a fallback): stops a script filling the disk with files.
+    options.AddPolicy(StatementsController.UploadRateLimitPolicy, context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value is { Length: > 0 } userId
+            ? $"user:{userId}"
+            : $"ip:{context.Connection.RemoteIpAddress?.ToString() ?? "unknown"}",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = Math.Max(1, uploadPermitLimit),
+            Window = TimeSpan.FromMinutes(Math.Max(1, uploadWindowMinutes)),
+            QueueLimit = 0,
+        }));
     options.OnRejected = async (context, cancellationToken) =>
     {
         var wait = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter) ? retryAfter : TimeSpan.FromMinutes(1);
@@ -223,16 +239,68 @@ builder.Services.AddRateLimiter(options =>
     };
 });
 
+// ---- Production hosting ----
+
+// Behind Nginx / a load balancer the API sees the proxy's address. Trust X-Forwarded-For/Proto only from
+// configured proxies so rate limits use the real visitor IP and generated links use https.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    foreach (var proxy in builder.Configuration.GetSection("ReverseProxy:KnownProxies").Get<string[]>() ?? [])
+        options.KnownProxies.Add(IPAddress.Parse(proxy));
+    foreach (var network in builder.Configuration.GetSection("ReverseProxy:KnownNetworks").Get<string[]>() ?? [])
+        options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse(network));
+});
+
+// Login cookies, CSRF tokens and email links are encrypted with data-protection keys. Keys kept only in memory
+// would log everyone out (and break pending email links) on every restart or container redeploy.
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("DollarShark");
+var keysPath = builder.Configuration["DataProtection:KeysPath"];
+if (!string.IsNullOrWhiteSpace(keysPath))
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(keysPath));
+else if (!builder.Environment.IsDevelopment())
+    throw new InvalidOperationException("Set DataProtection:KeysPath to a private, persistent directory (for example a Docker volume) so sign-ins survive restarts.");
+
+var redirectToHttps = builder.Configuration.GetValue("Https:Redirect", !builder.Environment.IsDevelopment());
+builder.Services.AddHttpsRedirection(options => options.HttpsPort = builder.Configuration.GetValue("Https:Port", 443));
+builder.Services.AddHsts(options =>
+{
+    options.MaxAge = TimeSpan.FromDays(builder.Configuration.GetValue("Https:HstsMaxAgeDays", 180));
+    options.IncludeSubDomains = false;
+});
+
+// Unhandled errors become a plain ProblemDetails response: no stack traces or exception messages reach the
+// browser, and the traceId lets you find the full error in the server log.
+builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
+{
+    context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
+    if (context.ProblemDetails.Status == StatusCodes.Status500InternalServerError)
+    {
+        context.ProblemDetails.Title = "Something went wrong on our side. Please try again.";
+        context.ProblemDetails.Detail = null;
+    }
+});
+
 var app = builder.Build();
+
+app.UseForwardedHeaders();
+app.UseExceptionHandler();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
+else
+{
+    app.UseHsts();
+}
+if (redirectToHttps) app.UseHttpsRedirection();
 
 app.UseCors();
-app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+// After authentication so per-user limits (statement uploads) can see who is signed in.
+app.UseRateLimiter();
 app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .WithName("Health").WithTags("Health");

@@ -12,6 +12,7 @@ import DashboardPage from './pages/DashboardPage';
 import LandingPage from './pages/LandingPage';
 import { ConfirmEmailPage, ForgotPasswordPage, ResetPasswordPage } from './pages/AccountEmailPages';
 import DollarSharkLogo from './components/DollarSharkLogo';
+import ErrorBoundary from './components/ErrorBoundary';
 import './App.css';
 
 function ProtectedApp() {
@@ -53,14 +54,14 @@ function ProtectedApp() {
     </Container></Navbar>
     <main><Container className="main-content">
       {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
-      <Routes>
+      <ErrorBoundary key={location.pathname}><Routes>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/transactions" element={<TransactionsPage />} />
         <Route path="/statements" element={<StatementsPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
-      </Routes>
+      </Routes></ErrorBoundary>
       <footer>DollarShark <span>·</span> Personal finance, made clearer.</footer>
     </Container></main>
   </div>;

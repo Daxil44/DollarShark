@@ -573,6 +573,26 @@ public sealed class StatementIntegrationTests
     }
 
     [Fact]
+    public async Task StatementUploadsAreRateLimitedPerUser()
+    {
+        await using var factory = new StatementApiFactory(uploadPermitLimit: 2);
+        using var userA = factory.CreateClient();
+        using var userB = factory.CreateClient();
+        var (csrfA, accountA) = await RegisterAndCreateAccount(userA, "upload-limit-a@example.test");
+        var (csrfB, accountB) = await RegisterAndCreateAccount(userB, "upload-limit-b@example.test");
+        var csv = Encoding.UTF8.GetBytes("Date,Description,Amount\n2026-10-20,Coffee,-4.25\n");
+
+        Assert.Equal(HttpStatusCode.Created, (await Upload(userA, accountA, "one.csv", csv, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await Upload(userA, accountA, "two.csv", csv, csrfA)).StatusCode);
+        var limited = await Upload(userA, accountA, "three.csv", csv, csrfA);
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.Contains("Please wait about", await limited.Content.ReadAsStringAsync());
+
+        // The limit is per user, so another account is unaffected.
+        Assert.Equal(HttpStatusCode.Created, (await Upload(userB, accountB, "b.csv", csv, csrfB)).StatusCode);
+    }
+
+    [Fact]
     public async Task CsvPreviewSuggestsCategoriesFromTheUsersRules()
     {
         await using var factory = new StatementApiFactory();
@@ -701,13 +721,15 @@ public sealed class StatementIntegrationTests
         private readonly SqliteConnection connection;
         private int initialized;
         private readonly long maxFileSizeBytes;
+        private readonly int uploadPermitLimit;
         public string StorageRoot { get; } = Path.Combine(Path.GetTempPath(), "DollarShark-StatementTests", Guid.NewGuid().ToString("N"));
         public StatementStorageFailureSwitch StorageSwitch { get; } = new();
         public StatementDatabaseFailureSwitch DbFailures { get; } = new();
 
-        public StatementApiFactory(long maxFileSizeBytes = 15 * 1024 * 1024)
+        public StatementApiFactory(long maxFileSizeBytes = 15 * 1024 * 1024, int uploadPermitLimit = 1000)
         {
             this.maxFileSizeBytes = maxFileSizeBytes;
+            this.uploadPermitLimit = uploadPermitLimit;
             connection = new SqliteConnection(connectionString);
             connection.Open();
         }
@@ -730,6 +752,7 @@ public sealed class StatementIntegrationTests
             builder.UseSetting("Auth:RequireConfirmedEmail", "false");
             builder.UseSetting("RateLimiting:AuthEmail:PermitLimit", "1000");
             builder.UseSetting("RateLimiting:Login:PermitLimit", "1000");
+            builder.UseSetting("RateLimiting:Upload:PermitLimit", uploadPermitLimit.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.UseSetting("StatementStorage:RootPath", StorageRoot);
             builder.UseSetting("StatementStorage:MaxFileSizeBytes", maxFileSizeBytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
             builder.ConfigureServices(services =>

@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import { api, apiErrorMessage } from '../api';
 import FirstRunGuide from '../components/FirstRunGuide';
+import ErrorBoundary from '../components/ErrorBoundary';
 import type { Account, AccountBalanceHistory, Category, DashboardBalanceTotals, DashboardCurrencySummary, DashboardOverview, DashboardRecentTransaction, TransactionPage } from '../types';
 
 type Period = { from: string; to: string };
@@ -335,7 +336,7 @@ export default function DashboardPage() {
       {tabs.map(item => <Nav.Item key={item.key}><Nav.Link eventKey={item.key} role="tab" aria-selected={tab === item.key}>{item.label}</Nav.Link></Nav.Item>)}
     </Nav>}
 
-    {loading ? <div className="content-card text-center py-5"><Spinner animation="border" role="status"><span className="visually-hidden">Loading dashboard</span></Spinner></div> : overview && <>
+    {loading ? <div className="content-card text-center py-5"><Spinner animation="border" role="status"><span className="visually-hidden">Loading dashboard</span></Spinner></div> : overview && <ErrorBoundary key={`${tab}|${selectedAccountId}|${period.from}|${period.to}`}>
       {selectedAccount && accountSummary ? <section className="mb-4" aria-label={`${selectedAccount.name} account summary`}>
         <div className="d-flex justify-content-between align-items-start gap-3 mb-3"><div><div className="eyebrow">ACCOUNT DASHBOARD</div><h2 className="section-title mb-1">{selectedAccount.name}</h2><div className="text-secondary">{selectedAccount.institution} · {selectedAccount.accountType} · {selectedAccount.currency}</div></div><Badge bg={selectedAccount.classification === 'Liability' ? 'warning' : 'success'} text={selectedAccount.classification === 'Liability' ? 'dark' : undefined}>{selectedAccount.classification}</Badge></div>
         <div className="row g-3">{[
@@ -462,6 +463,6 @@ export default function DashboardPage() {
           <thead><tr><th>Date</th><th>Description</th><th>Account</th><th>Category</th><th className="text-end">Amount</th><th>Type</th></tr></thead><tbody>{overview.recentTransactions.map(transaction => <RecentTransactionRow key={transaction.id} transaction={transaction} />)}</tbody>
         </Table>}
       </div>}
-    </>}
+    </ErrorBoundary>}
   </>;
 }

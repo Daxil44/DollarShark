@@ -1,6 +1,7 @@
 using DollarShark.Application.Statements;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace DollarShark.Api.Controllers;
 
@@ -10,8 +11,11 @@ public sealed class StatementsController(
     IStatementImportService service,
     ILogger<StatementsController> logger) : ApiControllerBase
 {
+    public const string UploadRateLimitPolicy = "statement-upload";
+
     [HttpPost]
     [Consumes("multipart/form-data")]
+    [EnableRateLimiting(UploadRateLimitPolicy)]
     public async Task<IActionResult> Upload(
         [FromForm] Guid financialAccountId,
         [FromForm] IFormFile? file,

@@ -410,15 +410,57 @@ public sealed class AuthenticationIntegrationTests
     private sealed record CategoryDto(Guid Id, string Name, bool IsSystem);
     private sealed record TransactionDto(Guid Id);
 
+    [Fact]
+    public async Task UnexpectedServerErrorsReturnProblemDetailsWithoutStackTraces()
+    {
+        await using var factory = new ApiFactory(failAccounts: true);
+        using var client = factory.CreateClient();
+        await Register(client, "boom@example.test");
+
+        var response = await client.GetAsync("/api/accounts");
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var body = await response.Content.ReadAsStringAsync();
+        var problem = JsonDocument.Parse(body).RootElement;
+        Assert.Equal("Something went wrong on our side. Please try again.", problem.GetProperty("title").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(problem.GetProperty("traceId").GetString()));
+        Assert.DoesNotContain(ExplodingAccountService.SecretMessage, body);
+        Assert.DoesNotContain("InvalidOperationException", body);
+        Assert.DoesNotContain(" at ", body);
+    }
+
+    [Fact]
+    public async Task ProductionRedirectsHttpToHttps()
+    {
+        await using var factory = new ApiFactory("Production");
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var response = await client.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.TemporaryRedirect, response.StatusCode);
+        Assert.Equal("https://localhost/health", response.Headers.Location?.ToString());
+    }
+
+    private sealed class ExplodingAccountService : DollarShark.Application.Accounts.IAccountService
+    {
+        public const string SecretMessage = "Connection string Server=prod;Password=hunter2 failed";
+        private static Exception Boom() => new InvalidOperationException(SecretMessage);
+        public Task<DollarShark.Application.Common.UseCaseResult<IReadOnlyList<DollarShark.Application.Accounts.AccountDto>>> ListAsync(bool includeInactive, CancellationToken cancellationToken) => throw Boom();
+        public Task<DollarShark.Application.Common.UseCaseResult<DollarShark.Application.Accounts.AccountDto>> GetAsync(Guid id, CancellationToken cancellationToken) => throw Boom();
+        public Task<DollarShark.Application.Common.UseCaseResult<DollarShark.Application.Accounts.AccountDto>> CreateAsync(DollarShark.Application.Accounts.AccountRequest request, CancellationToken cancellationToken) => throw Boom();
+        public Task<DollarShark.Application.Common.UseCaseResult<DollarShark.Application.Accounts.AccountDto>> UpdateAsync(Guid id, DollarShark.Application.Accounts.AccountRequest request, CancellationToken cancellationToken) => throw Boom();
+        public Task<DollarShark.Application.Common.UseCaseResult<DollarShark.Application.Accounts.AccountDto>> SetStatusAsync(Guid id, DollarShark.Application.Accounts.AccountStatusRequest request, CancellationToken cancellationToken) => throw Boom();
+    }
+
     private sealed class ApiFactory : WebApplicationFactory<Program>
     {
         private readonly SqliteConnection connection = new("Data Source=:memory:");
         private readonly string environment;
+        private readonly bool failAccounts;
         private int initialized;
 
-        public ApiFactory(string environment = "Development")
+        public ApiFactory(string environment = "Development", bool failAccounts = false)
         {
             this.environment = environment;
+            this.failAccounts = failAccounts;
             connection.Open();
         }
 
@@ -447,6 +489,7 @@ public sealed class AuthenticationIntegrationTests
                 builder.UseSetting("Email:Provider", "Smtp");
                 builder.UseSetting("Email:Smtp:Host", "smtp.example.test");
                 builder.UseSetting("Email:FromAddress", "no-reply@example.test");
+                builder.UseSetting("DataProtection:KeysPath", Path.Combine(Path.GetTempPath(), "DollarShark-TestKeys", Guid.NewGuid().ToString("N")));
             }
             builder.ConfigureServices(services =>
             {
@@ -455,6 +498,11 @@ public sealed class AuthenticationIntegrationTests
                 services.RemoveAll<DbContextOptions<FinanceDbContext>>();
                 services.RemoveAll<FinanceDbContext>();
                 services.AddDbContext<FinanceDbContext>(options => options.UseSqlite(connection));
+                if (failAccounts)
+                {
+                    services.RemoveAll<DollarShark.Application.Accounts.IAccountService>();
+                    services.AddScoped<DollarShark.Application.Accounts.IAccountService, ExplodingAccountService>();
+                }
             });
         }
 
