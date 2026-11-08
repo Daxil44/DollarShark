@@ -1,3 +1,4 @@
+using DollarShark.Application.Categories;
 using DollarShark.Application.Common;
 using DollarShark.Domain;
 using Microsoft.AspNetCore.Http;
@@ -38,7 +39,9 @@ public sealed record StatementCsvCandidate(
     string? SubDescription = null,
     string? SourceTransactionType = null,
     decimal? SourceAmount = null,
-    string? SuggestedTransactionType = null);
+    string? SuggestedTransactionType = null,
+    Guid? SuggestedCategoryId = null,
+    string? SuggestedCategoryName = null);
 public sealed record StatementCsvPreview(
     IReadOnlyList<StatementCsvCandidate> Candidates,
     int ValidRows,
@@ -112,6 +115,7 @@ public sealed class StatementImportService(
     IDuplicateDetectionService duplicateDetection,
     ITransactionService transactionService,
     IStatementStorage storage,
+    ICategoryRuleService categoryRules,
     StatementUploadOptions options,
     StatementCsvParsingOptions csvOptions,
     ILogger<StatementImportService> logger) : IStatementImportService
@@ -260,7 +264,14 @@ public sealed class StatementImportService(
             var duplicateRequests = preview.Candidates.Select(candidate => new DuplicateDetectionRequest(candidate.TransactionDate,
                 candidate.Description, NormalizePreviewAmount(statement.StatementType, candidate.Amount), candidate.Currency ?? currency, candidate.ReferenceNumber)).ToArray();
             var duplicateResults = await duplicateDetection.CheckManyAsync(statement.FinancialAccountId, duplicateRequests, cancellationToken);
-            var candidates = preview.Candidates.Select((candidate, index) => candidate with { DuplicateCheck = duplicateResults[index] }).ToArray();
+            // Pre-fill categories from the user's auto-categorization rules; the user can still change them before importing.
+            var suggestions = await categoryRules.SuggestAsync(preview.Candidates.Select(candidate => (string?)candidate.Description).ToArray(), cancellationToken);
+            var candidates = preview.Candidates.Select((candidate, index) => candidate with
+            {
+                DuplicateCheck = duplicateResults[index],
+                SuggestedCategoryId = suggestions[index]?.CategoryId,
+                SuggestedCategoryName = suggestions[index]?.CategoryName,
+            }).ToArray();
             return UseCaseResult<StatementCsvPreview>.Ok(preview with { Candidates = candidates });
         }
         catch (FileNotFoundException)

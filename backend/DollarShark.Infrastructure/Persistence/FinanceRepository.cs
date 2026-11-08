@@ -12,7 +12,7 @@ namespace DollarShark.Infrastructure.Persistence;
 
 public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext currentUser) : IAccountRepository, ICategoryRepository, ITransactionRepository, ITransferRepository
 {
-    private static readonly SemaphoreSlim SqliteDuplicateQueryGate = new(1, 1);
+    private static SemaphoreSlim SqliteDuplicateQueryGate => SqliteQueryGate.Instance;
     private string UserId => string.IsNullOrWhiteSpace(currentUser.UserId)
         ? throw new InvalidOperationException("A signed-in user is required for finance data access.")
         : currentUser.UserId;

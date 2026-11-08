@@ -6,6 +6,7 @@ import {
   Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { api, apiErrorMessage } from '../api';
+import FirstRunGuide from '../components/FirstRunGuide';
 import type { Account, AccountBalanceHistory, Category, DashboardBalanceTotals, DashboardCurrencySummary, DashboardOverview, DashboardRecentTransaction, TransactionPage } from '../types';
 
 type Period = { from: string; to: string };
@@ -305,6 +306,8 @@ export default function DashboardPage() {
       <div><div className="eyebrow">YOUR MONEY, AT A GLANCE</div><h1>Dashboard</h1><p className="text-secondary mb-0">A clear view of your saved financial activity.</p></div>
       <Link to="/transactions" className="btn btn-dark">＋ Add transaction</Link>
     </div>
+
+    {!selectedAccountId && <FirstRunGuide />}
 
     {error && <Alert variant="danger" dismissible onClose={() => setError('')}><div className="d-flex justify-content-between align-items-center gap-3"><span>{error}</span><Button variant="outline-danger" size="sm" onClick={() => void loadOverview()}>Retry</Button></div></Alert>}
 

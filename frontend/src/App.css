@@ -102,3 +102,26 @@ footer span { padding: 0 .3rem; }
 .btn-google svg { width: 20px; height: 20px; }
 .auth-divider { display: flex; align-items: center; gap: .75rem; margin: 1.1rem 0; color: #8a9995; font-size: .8rem; }
 .auth-divider::before, .auth-divider::after { content: ''; flex: 1; height: 1px; background: #e3ebe8; }
+
+/* Auto-categorization rules */
+.rule-pattern { color: #173d38; background: #eef5f2; padding: .1rem .4rem; border-radius: 6px; font-size: .88rem; }
+.rule-category { font-weight: 600; border: 1px solid #e3ebe8; }
+.rule-hint { font-size: .72rem; color: #16845d; font-weight: 600; margin-top: .15rem; }
+
+/* First-run guide */
+.first-run { border-color: #cfe5db; background: linear-gradient(180deg, #f6fbf8, #fff 60%); }
+.first-run-bar { height: 6px; border-radius: 999px; background: #e5efeb; overflow: hidden; margin-bottom: 1rem; }
+.first-run-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #1a9a6b, #48c78e); transition: width .4s ease; }
+.first-run-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.first-run-steps li { display: flex; align-items: center; gap: .9rem; padding: .75rem .9rem; border: 1px solid #e5ece9; border-radius: 12px; background: #fff; }
+.first-run-steps li.next { border-color: #9fd6bd; box-shadow: 0 4px 14px rgba(22, 132, 93, .08); }
+.first-run-steps li.done { background: #f8faf9; }
+.first-run-steps li.done strong { color: #6c7d79; text-decoration: line-through; text-decoration-color: #b9c6c2; }
+.first-run-check { flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; border: 2px solid #cfe0d9; color: #5d6f6c; font-weight: 800; font-size: .85rem; }
+.first-run-steps li.next .first-run-check { border-color: #16845d; color: #16845d; }
+.first-run-steps li.done .first-run-check { background: #16845d; border-color: #16845d; color: #fff; }
+.first-run-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.first-run-text span { color: #6c7d79; font-size: .85rem; }
+.first-run-status { color: #16845d; font-weight: 700; font-size: .82rem; }
+@media (max-width: 576px) { .first-run-steps li { flex-wrap: wrap; } .first-run-steps li .btn { margin-left: 2.6rem; } }
+.rule-search { max-width: 320px; }
