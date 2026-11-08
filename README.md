@@ -97,6 +97,21 @@ Restart the API. How accounts are matched:
 - If an **unconfirmed** account has that email, its password is removed before linking, because whoever registered it never proved they own the address. This blocks "pre-registration" account takeovers.
 - Google accounts whose email Google has not verified are refused.
 
+## Production configuration
+
+Settings the API needs outside Development (environment variables use `__` for `:`, e.g. `DataProtection__KeysPath`):
+
+| Setting | What it does |
+|---|---|
+| `FrontendOrigin` | Exact HTTPS origin of the site (CORS + email links). Required. |
+| `DataProtection:KeysPath` | Private, persistent folder (e.g. a Docker volume) for the keys that encrypt login cookies, CSRF tokens and email links. Required in production; without it every restart would log everyone out. Keep it private and backed up. |
+| `ReverseProxy:KnownProxies` / `ReverseProxy:KnownNetworks` | IPs or CIDR ranges of Nginx/the load balancer (e.g. the Docker network `172.16.0.0/12`). Only these may set `X-Forwarded-For`/`X-Forwarded-Proto`, so rate limits see the real visitor IP and links use https. Loopback is trusted by default. |
+| `Https:Redirect` (default `true` outside Development), `Https:Port` (443), `Https:HstsMaxAgeDays` (180) | Redirect http → https and send HSTS. With TLS terminated at Nginx, keep forwarding `X-Forwarded-Proto` so redirects don't loop. |
+| `Email:*` | SMTP settings (see Account emails). The log provider is refused in production. |
+| `RateLimiting:Upload:PermitLimit` / `WindowMinutes` | Statement uploads per signed-in user (default 30 per 60 minutes). |
+
+Unhandled server errors return a ProblemDetails body with a friendly title and a `traceId` — never a stack trace or exception message; the full error is in the server log under that trace id. In the browser, an error boundary around each page (and the dashboard content) shows a "this section could not be displayed" card with *Try again* instead of a blank screen.
+
 ## Statement uploads
 
 - `POST /api/statements` accepts multipart `financialAccountId` and `file` fields. `GET /api/statements?page=1&pageSize=25`, `GET /api/statements/{id}`, and `DELETE /api/statements/{id}` manage the signed-in user's metadata and files. There is no download endpoint.

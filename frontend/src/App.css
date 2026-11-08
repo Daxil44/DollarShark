@@ -125,3 +125,8 @@ footer span { padding: 0 .3rem; }
 .first-run-status { color: #16845d; font-weight: 700; font-size: .82rem; }
 @media (max-width: 576px) { .first-run-steps li { flex-wrap: wrap; } .first-run-steps li .btn { margin-left: 2.6rem; } }
 .rule-search { max-width: 320px; }
+
+/* Error boundary fallback */
+.error-fallback { text-align: center; }
+.error-fallback-page { min-height: 100vh; display: grid; place-content: center; padding: 2rem 1rem; background: #f4f7f6; }
+.error-fallback-icon { width: 48px; height: 48px; margin: 0 auto .9rem; display: grid; place-items: center; border-radius: 14px; background: #fdecea; color: #c2412f; font-size: 1.4rem; font-weight: 800; }
