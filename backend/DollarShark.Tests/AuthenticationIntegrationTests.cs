@@ -233,6 +233,100 @@ public sealed class AuthenticationIntegrationTests
         Assert.Contains(accountsB, account => account.Id == accountBUsd.Id);
     }
 
+    [Fact]
+    public async Task CategoryRulesArePrivatePerUserAndOnlyCategorizeTheOwnersUncategorizedTransactions()
+    {
+        await using var factory = new ApiFactory();
+        using var userA = factory.CreateClient();
+        using var userB = factory.CreateClient();
+        var csrfA = await Register(userA, "rules-a@example.test");
+        var csrfB = await Register(userB, "rules-b@example.test");
+        var groceries = Guid.Parse("10000000-0000-0000-0000-000000000001");
+        var shopping = Guid.Parse("10000000-0000-0000-0000-000000000006");
+        var privateB = await CreateCategory(userB, csrfB, "B secret");
+
+        var accountA = await CreateAccount(userA, csrfA, "A chequing");
+        var accountB = await CreateAccount(userB, csrfB, "B chequing");
+        var matchingA = await CreateTransaction(userA, csrfA, accountA.Id, null, description: "FRESHMART #12 TORONTO");
+        var alreadyCategorizedA = await CreateTransaction(userA, csrfA, accountA.Id, shopping, description: "FRESHMART gift card");
+        var otherA = await CreateTransaction(userA, csrfA, accountA.Id, null, description: "Payroll");
+        var matchingB = await CreateTransaction(userB, csrfB, accountB.Id, null, description: "FRESHMART #99");
+
+        // Validation: a rule can't point at someone else's private category, and junk input is rejected.
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post(userA, "/api/category-rules", new { pattern = "FRESHMART", matchType = "Contains", categoryId = privateB.Id }, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post(userA, "/api/category-rules", new { pattern = "x", matchType = "Contains", categoryId = groceries }, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post(userA, "/api/category-rules", new { pattern = "FRESHMART", matchType = "Regex", categoryId = groceries }, csrfA)).StatusCode);
+
+        var created = await Post(userA, "/api/category-rules", new { pattern = "freshmart", matchType = "Contains", categoryId = groceries, priority = 50 }, csrfA);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var rule = await created.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Groceries", rule.GetProperty("categoryName").GetString());
+        var ruleId = rule.GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post(userA, "/api/category-rules", new { pattern = "FRESHMART", matchType = "Contains", categoryId = shopping }, csrfA)).StatusCode);
+
+        // User B can't see, edit or delete user A's rule.
+        Assert.Empty((await userB.GetFromJsonAsync<JsonElement[]>("/api/category-rules"))!);
+        Assert.Equal(HttpStatusCode.NotFound, (await Put(userB, $"/api/category-rules/{ruleId}", new { pattern = "hijack", matchType = "Contains", categoryId = groceries }, csrfB)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await Delete(userB, $"/api/category-rules/{ruleId}", csrfB)).StatusCode);
+
+        var applied = await Post(userA, "/api/category-rules/apply", new { }, csrfA);
+        Assert.Equal(HttpStatusCode.OK, applied.StatusCode);
+        var result = await applied.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, result.GetProperty("updatedCount").GetInt32());
+        Assert.Equal(1, result.GetProperty("uncategorizedRemaining").GetInt32());
+
+        Assert.Equal(groceries, await CategoryOf(userA, matchingA.Id));
+        Assert.Equal(shopping, await CategoryOf(userA, alreadyCategorizedA.Id));
+        Assert.Null(await CategoryOf(userA, otherA.Id));
+        Assert.Null(await CategoryOf(userB, matchingB.Id));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await Delete(userA, $"/api/category-rules/{ruleId}", csrfA)).StatusCode);
+        Assert.Empty((await userA.GetFromJsonAsync<JsonElement[]>("/api/category-rules"))!);
+    }
+
+    [Fact]
+    public async Task StarterRulesAreCopiedIntoTheUsersOwnEditableRulesWithoutDuplicates()
+    {
+        await using var factory = new ApiFactory();
+        using var userA = factory.CreateClient();
+        using var userB = factory.CreateClient();
+        var csrfA = await Register(userA, "starter-a@example.test");
+        await Register(userB, "starter-b@example.test");
+
+        var first = await (await Post(userA, "/api/category-rules/starter", new { }, csrfA)).Content.ReadFromJsonAsync<JsonElement>();
+        var added = first.GetProperty("addedCount").GetInt32();
+        Assert.Equal(DollarShark.Application.Categories.StarterCategoryRules.All.Count, added);
+
+        var second = await (await Post(userA, "/api/category-rules/starter", new { }, csrfA)).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(0, second.GetProperty("addedCount").GetInt32());
+        Assert.Equal(added, second.GetProperty("alreadyPresentCount").GetInt32());
+
+        var rules = (await userA.GetFromJsonAsync<JsonElement[]>("/api/category-rules"))!;
+        Assert.Equal(added, rules.Length);
+        Assert.Empty((await userB.GetFromJsonAsync<JsonElement[]>("/api/category-rules"))!);
+
+        // They are ordinary rules: the user can edit and delete them.
+        var walmart = rules.Single(rule => rule.GetProperty("pattern").GetString() == "WALMART");
+        var groceries = Guid.Parse("10000000-0000-0000-0000-000000000001");
+        var edited = await Put(userA, $"/api/category-rules/{walmart.GetProperty("id").GetGuid()}", new { pattern = "WALMART", matchType = "Contains", categoryId = groceries, priority = 100 }, csrfA);
+        Assert.Equal(HttpStatusCode.OK, edited.StatusCode);
+        Assert.Equal("Groceries", (await edited.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("categoryName").GetString());
+        var netflix = rules.Single(rule => rule.GetProperty("pattern").GetString() == "NETFLIX");
+        Assert.Equal(HttpStatusCode.NoContent, (await Delete(userA, $"/api/category-rules/{netflix.GetProperty("id").GetGuid()}", csrfA)).StatusCode);
+
+        // Re-adding only restores the deleted one and keeps the user's edit.
+        var restored = await (await Post(userA, "/api/category-rules/starter", new { }, csrfA)).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(1, restored.GetProperty("addedCount").GetInt32());
+        var walmartAfter = (await userA.GetFromJsonAsync<JsonElement[]>("/api/category-rules"))!.Single(rule => rule.GetProperty("pattern").GetString() == "WALMART");
+        Assert.Equal("Groceries", walmartAfter.GetProperty("categoryName").GetString());
+    }
+
+    private static async Task<Guid?> CategoryOf(HttpClient client, Guid transactionId)
+    {
+        var transaction = await client.GetFromJsonAsync<JsonElement>($"/api/transactions/{transactionId}");
+        return transaction.GetProperty("categoryId").ValueKind == JsonValueKind.Null ? null : transaction.GetProperty("categoryId").GetGuid();
+    }
+
     private const string Password = "StrongPass123!";
 
     private static object AccountBody(string name, string currency = "CAD") => new

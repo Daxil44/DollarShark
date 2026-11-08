@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Alert, Button, Form, Modal, Spinner, Table } from 'react-bootstrap';
 import { api, apiErrorMessage } from '../api';
 import type { Category, CategoryInput } from '../types';
+import CategoryRulesCard from '../components/CategoryRulesCard';
 
 const blankForm = (): CategoryInput => ({ name: '', parentCategoryId: '' });
 
@@ -93,6 +94,8 @@ export default function CategoriesPage() {
           </tr>)}</tbody>
         </Table>}
     </div>
+    {/* Always mounted: reloading categories after "apply" must not reset the card's messages. */}
+    <CategoryRulesCard categories={categories} onApplied={() => void loadCategories()} />
     <Modal show={showForm} onHide={() => setShowForm(false)} centered>
       <Form onSubmit={save}>
         <Modal.Header closeButton><Modal.Title>{editing ? 'Edit category' : 'Add category'}</Modal.Title></Modal.Header>

@@ -572,6 +572,28 @@ public sealed class StatementIntegrationTests
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/statements/{statement.Id}")).StatusCode);
     }
 
+    [Fact]
+    public async Task CsvPreviewSuggestsCategoriesFromTheUsersRules()
+    {
+        await using var factory = new StatementApiFactory();
+        using var client = factory.CreateClient();
+        var (csrf, accountId) = await RegisterAndCreateAccount(client, "rule-preview@example.test");
+        var groceries = Guid.Parse("10000000-0000-0000-0000-000000000001");
+        var rule = await PostJson(client, "/api/category-rules", new { pattern = "FRESHMART", matchType = "Contains", categoryId = groceries }, csrf);
+        Assert.Equal(HttpStatusCode.Created, rule.StatusCode);
+
+        var csv = Encoding.UTF8.GetBytes("Date,Description,Amount\n2026-10-20,FreshMart #12 Toronto,-42.10\n2026-10-21,Payroll,1500.00\n");
+        var statement = (await (await Upload(client, accountId, "bank.csv", csv, csrf)).Content.ReadFromJsonAsync<StatementDto>())!;
+        var parsed = await ParseCsv(client, statement.Id, csrf);
+        Assert.True(parsed.StatusCode == HttpStatusCode.OK, await parsed.Content.ReadAsStringAsync());
+
+        using var json = JsonDocument.Parse(await parsed.Content.ReadAsStringAsync());
+        var candidates = json.RootElement.GetProperty("candidates");
+        Assert.Equal(groceries, candidates[0].GetProperty("suggestedCategoryId").GetGuid());
+        Assert.Equal("Groceries", candidates[0].GetProperty("suggestedCategoryName").GetString());
+        Assert.Equal(JsonValueKind.Null, candidates[1].GetProperty("suggestedCategoryId").ValueKind);
+    }
+
     private static async Task<(string Csrf, Guid AccountId)> RegisterAndCreateAccount(HttpClient client, string email, string accountType = "Chequing")
     {
         var csrf = await GetCsrf(client);
@@ -673,7 +695,10 @@ public sealed class StatementIntegrationTests
 
     private sealed class StatementApiFactory : WebApplicationFactory<Program>
     {
-        private readonly SqliteConnection connection = new("Data Source=:memory:");
+        // Shared-cache in-memory database: each request/DbContext gets its own connection (SqliteConnection is not
+        // safe for concurrent use), while this keep-alive connection keeps the database alive for the test.
+        private readonly string connectionString = $"Data Source=file:statements-{Guid.NewGuid():N}?mode=memory&cache=shared";
+        private readonly SqliteConnection connection;
         private int initialized;
         private readonly long maxFileSizeBytes;
         public string StorageRoot { get; } = Path.Combine(Path.GetTempPath(), "DollarShark-StatementTests", Guid.NewGuid().ToString("N"));
@@ -683,6 +708,7 @@ public sealed class StatementIntegrationTests
         public StatementApiFactory(long maxFileSizeBytes = 15 * 1024 * 1024)
         {
             this.maxFileSizeBytes = maxFileSizeBytes;
+            connection = new SqliteConnection(connectionString);
             connection.Open();
         }
 
@@ -717,7 +743,7 @@ public sealed class StatementIntegrationTests
                 services.RemoveAll<StatementUploadOptions>();
                 services.AddSingleton(new StatementUploadOptions { MaxFileSizeBytes = maxFileSizeBytes });
                 services.Configure<StatementStorageOptions>(options => options.RootPath = StorageRoot);
-                services.AddDbContext<FinanceDbContext>((provider, options) => options.UseSqlite(connection)
+                services.AddDbContext<FinanceDbContext>((provider, options) => options.UseSqlite(connectionString)
                     .AddInterceptors(provider.GetRequiredService<StatementDatabaseSaveInterceptor>()));
                 services.AddSingleton(StorageSwitch);
                 services.AddScoped<LocalPrivateStatementStorage>();

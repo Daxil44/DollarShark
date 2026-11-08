@@ -179,10 +179,12 @@ export default function StatementsPage() {
         ...candidate,
         selected: false,
         transactionType: account?.accountType === 'Investment' ? '' : statement.statementType === 'Bank' ? (candidate.amount !== null && candidate.amount > 0 ? 'Income' : candidate.amount !== null && candidate.amount < 0 ? 'Expense' : '') : (candidate.amount !== null && candidate.amount > 0 ? 'Expense' : ''),
-        categoryId: null,
+        categoryId: candidate.suggestedCategoryId ?? null,
         duplicateDecision: candidate.duplicateCheck?.classification === 'LikelyDuplicate' ? 'Skip' as const : candidate.duplicateCheck?.classification === 'PossibleDuplicate' ? 'Unresolved' as const : null
       }));
       setCsvPreview({ statement, result: response.data, rows });
+      const autoCategorized = rows.filter(row => row.suggestedCategoryId).length;
+      if (autoCategorized > 0) setNotice(`${autoCategorized} row${autoCategorized === 1 ? ' was' : 's were'} categorized by your rules. Review them before importing.`);
     } catch (parseError) {
       setError(apiErrorMessage(parseError));
     } finally {
@@ -388,7 +390,7 @@ export default function StatementsPage() {
               <td><Form.Control aria-label={`Sub-description row ${row.sourceRowNumber}`} size="sm" value={row.subDescription ?? ''} onChange={event => editRow(row.sourceRowNumber, { subDescription: event.currentTarget.value || null })} /></td>
               <td><div className="small text-secondary">Source: {row.sourceAmount ?? row.amount ?? '—'}</div><Form.Control aria-label={`Amount row ${row.sourceRowNumber}`} type="number" step="0.0001" size="sm" value={row.amount ?? ''} onChange={event => editRow(row.sourceRowNumber, { amount: event.currentTarget.value === '' ? null : Number(event.currentTarget.value) })} /><div className={`small fw-semibold text-${typeTone}`}>Normalized: {normalized === null ? 'Choose type' : normalized.toFixed(2)}</div></td>
               <td><Form.Select aria-label={`Type row ${row.sourceRowNumber}`} size="sm" value={row.transactionType} onChange={event => editRow(row.sourceRowNumber, { transactionType: event.currentTarget.value })}><option value="">Choose type</option><option>Expense</option><option>Income</option><option>Refund</option><option>Transfer</option></Form.Select><Badge bg={typeTone} className="mt-1">{row.transactionType || 'Review type'}</Badge></td>
-              <td><Form.Select aria-label={`Category row ${row.sourceRowNumber}`} size="sm" value={row.categoryId ?? ''} disabled={!valid || confirming || row.duplicateDecision === 'Skip'} onChange={event => editRow(row.sourceRowNumber, { categoryId: event.currentTarget.value || null })}><option value="">Uncategorized</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</Form.Select></td>
+              <td><Form.Select aria-label={`Category row ${row.sourceRowNumber}`} size="sm" value={row.categoryId ?? ''} disabled={!valid || confirming || row.duplicateDecision === 'Skip'} onChange={event => editRow(row.sourceRowNumber, { categoryId: event.currentTarget.value || null })}><option value="">Uncategorized</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</Form.Select>{row.suggestedCategoryId && row.categoryId === row.suggestedCategoryId && <div className="rule-hint" title="Set by one of your auto-categorization rules">⚡ by rule</div>}</td>
               <td>{row.currency ?? statementAccount?.currency ?? '—'}{row.referenceNumber && <div className="small text-secondary">{row.referenceNumber}</div>}</td>
               <td><Badge bg={valid ? row.selected ? 'primary' : 'secondary' : 'danger'}>{valid ? row.selected ? 'Selected' : 'Excluded' : 'Invalid'}</Badge>
                 {messages.length > 0 && <ul className="small text-danger mb-0 mt-1">{messages.map((message, index) => <li key={`${row.sourceRowNumber}-${index}`}>{message}</li>)}</ul>}

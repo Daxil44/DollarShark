@@ -30,6 +30,8 @@ builder.Services.AddScoped<ICurrentUserContext, HttpCurrentUserContext>();
 
 builder.Services.AddScoped<IAccountService, AccountService>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
+builder.Services.AddScoped<ICategoryRuleService, CategoryRuleService>();
+builder.Services.AddScoped<ICategoryRuleRepository, CategoryRuleRepository>();
 builder.Services.AddScoped<ITransactionService, TransactionService>();
 builder.Services.AddScoped<ITransferService, TransferService>();
 builder.Services.AddScoped<IDuplicateDetectionService, DuplicateDetectionService>();

@@ -118,10 +118,22 @@ Registration requires email confirmation and supports password reset (see above)
 
 To create optional demo data for your own account, replace the email placeholder in `docs/sample-data.sql` with the email you registered, then run the script against the DollarShark database. It adds a sample account, private category, and three transactions; rerunning it does not duplicate those sample transactions.
 
+## Auto-categorization rules
+
+- Manage rules on the **Categories** page: "when description *contains* / *starts with* / *is exactly* TEXT → set category". Matching ignores upper/lower case and repeated spaces.
+- CSV import previews pre-fill each row's category from the first matching rule (marked "⚡ by rule"); you can still change it before confirming. Nothing is saved until the import is confirmed.
+- **Common merchants:** one click adds about 90 starter rules for well-known Canadian merchants (Walmart, Superstore, Loblaws, Tim Hortons, Uber Eats, Petro-Canada, Netflix, Rogers, Air Canada…) mapped to the default categories. They are copied into the user's own rules, so each can be edited or deleted; clicking again only re-adds missing ones and never overwrites edits. The list lives in `StarterCategoryRules.cs`.
+- **Apply to uncategorized** runs the rules over existing transactions that have no category. Transactions that already have a category are never changed.
+- If several rules match, the lowest priority number wins, then the longest text, then the oldest rule. Rules are private per user and can use shared default categories or the user's own categories; deleting a private category deletes its rules. Limit: 200 rules per user.
+- The `Phase8CategoryRules` migration adds the `CategoryRules` table; apply it with the usual `database update` command.
+
+New users also see a **getting started** checklist on the Dashboard (add account → upload statement → review & import → optional rule). Steps tick off from real data, and it can be hidden.
+
 ## API overview
 
 - Accounts: GET /api/accounts?includeInactive=false, GET /api/accounts/{id}, POST /api/accounts, PUT /api/accounts/{id}, PATCH /api/accounts/{id}/status
 - Categories: GET /api/categories, GET /api/categories/{id}, POST /api/categories, PUT /api/categories/{id}, DELETE /api/categories/{id}
+- Category rules: GET /api/category-rules, POST /api/category-rules, PUT /api/category-rules/{id}, DELETE /api/category-rules/{id}, POST /api/category-rules/apply
 - Transactions: GET /api/transactions, GET /api/transactions/{id}, POST /api/transactions, PUT /api/transactions/{id}, DELETE /api/transactions/{id}
 - Statements: POST /api/statements, GET /api/statements, GET /api/statements/{id}, DELETE /api/statements/{id}
 - CSV preview: POST /api/statements/{id}/parse-csv

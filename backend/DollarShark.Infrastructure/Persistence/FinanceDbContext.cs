@@ -11,6 +11,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<StatementImport> StatementImports => Set<StatementImport>();
+    public DbSet<CategoryRule> CategoryRules => Set<CategoryRule>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -84,6 +85,17 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         statement.HasIndex(x => new { x.UserId, x.UploadedAtUtc });
         statement.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         statement.HasOne(x => x.FinancialAccount).WithMany().HasForeignKey(x => x.FinancialAccountId).OnDelete(DeleteBehavior.Restrict);
+
+        var rule = modelBuilder.Entity<CategoryRule>();
+        rule.HasKey(x => x.Id);
+        rule.Property(x => x.UserId).HasMaxLength(450).IsRequired();
+        rule.Property(x => x.Pattern).HasMaxLength(CategoryRule.MaxPatternLength).IsRequired();
+        rule.Property(x => x.MatchType).HasConversion<string>().HasMaxLength(16).IsRequired();
+        rule.Property(x => x.Priority).HasDefaultValue(CategoryRule.DefaultPriority);
+        rule.HasIndex(x => new { x.UserId, x.Priority });
+        rule.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        // Deleting a (private) category removes the rules that point at it.
+        rule.HasOne(x => x.Category).WithMany().HasForeignKey(x => x.CategoryId).OnDelete(DeleteBehavior.Cascade);
     }
 }
 

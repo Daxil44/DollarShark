@@ -127,6 +127,31 @@ export type StatementCsvCandidate = {
   sourceTransactionType?: string | null;
   sourceAmount?: number | null;
   suggestedTransactionType?: string | null;
+  suggestedCategoryId?: string | null;
+  suggestedCategoryName?: string | null;
+};
+
+export type CategoryRuleMatchType = 'Contains' | 'StartsWith' | 'Equals';
+
+export type CategoryRule = {
+  id: string;
+  pattern: string;
+  matchType: CategoryRuleMatchType;
+  categoryId: string;
+  categoryName: string;
+  priority: number;
+  createdAtUtc: string;
+};
+
+export type StarterRulesResult = {
+  addedCount: number;
+  alreadyPresentCount: number;
+  skippedForLimitCount: number;
+};
+
+export type ApplyCategoryRulesResult = {
+  updatedCount: number;
+  uncategorizedRemaining: number;
 };
 
 export type DuplicateCheck = {
