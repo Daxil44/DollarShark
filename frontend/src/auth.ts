@@ -1,7 +1,8 @@
 import { createContext, useContext } from 'react';
 import axios from 'axios';
 
-export type UserProfile = { id: string; email: string };
+export type UserProfile = { id: string; email: string; hasPassword?: boolean };
+export type DeleteAccountInput = { password?: string; confirmEmail?: string; confirmation: string };
 export type RegisterOutcome = 'signedIn' | 'confirmationRequired';
 export type AuthContextValue = {
   user: UserProfile | null;
@@ -9,6 +10,7 @@ export type AuthContextValue = {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<RegisterOutcome>;
   logout: () => Promise<void>;
+  deleteAccount: (input: DeleteAccountInput) => Promise<void>;
 };
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

@@ -79,6 +79,27 @@ public sealed class GoogleSignInIntegrationTests
     }
 
     [Fact]
+    public async Task GoogleOnlyUsersConfirmDeletionWithTheirEmail()
+    {
+        await using var factory = new GoogleApiFactory();
+        using var client = factory.CreateNoRedirectClient();
+        factory.Google.Identity = new("google-delete", "google.delete@example.test", true);
+        await client.GetAsync("/api/auth/external/google/callback");
+        var me = await client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        Assert.False(me.GetProperty("hasPassword").GetBoolean());
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await Post(client, "/api/auth/delete-account", new { confirmEmail = "someone.else@example.test", confirmation = "DELETE" })).StatusCode);
+        var deleted = await Post(client, "/api/auth/delete-account", new { confirmEmail = "GOOGLE.DELETE@example.test", confirmation = "DELETE" });
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/auth/me")).StatusCode);
+
+        // Signing in with the same Google account later starts a brand-new, empty account.
+        var again = await client.GetAsync("/api/auth/external/google/callback");
+        Assert.Equal("https://app.example.test/dashboard", again.Headers.Location!.ToString());
+        Assert.NotEqual(me.GetProperty("id").GetString(), (await client.GetFromJsonAsync<JsonElement>("/api/auth/me")).GetProperty("id").GetString());
+    }
+
+    [Fact]
     public async Task UnverifiedGoogleEmailIsRejected()
     {
         await using var factory = new GoogleApiFactory();

@@ -9,6 +9,7 @@ import CategoriesPage from './pages/CategoriesPage';
 import TransactionsPage from './pages/TransactionsPage';
 import StatementsPage from './pages/StatementsPage';
 import DashboardPage from './pages/DashboardPage';
+import AccountPage from './pages/AccountPage';
 import LandingPage from './pages/LandingPage';
 import { ConfirmEmailPage, ForgotPasswordPage, ResetPasswordPage } from './pages/AccountEmailPages';
 import DollarSharkLogo from './components/DollarSharkLogo';
@@ -50,7 +51,7 @@ function ProtectedApp() {
         <Nav.Link as={NavLink} to="/categories">Categories</Nav.Link>
         <Nav.Link as={NavLink} to="/transactions">Transactions</Nav.Link>
         <Nav.Link as={NavLink} to="/statements">Statements</Nav.Link>
-      </Nav><div className="user-controls"><span className="local-label"><span className="status-dot" />{user.email}</span><Button size="sm" variant="outline-secondary" onClick={() => void signOut()} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</Button></div></Navbar.Collapse>
+      </Nav><div className="user-controls"><Link to="/account" className="local-label account-link" title="Account settings"><span className="status-dot" />{user.email}</Link><Button size="sm" variant="outline-secondary" onClick={() => void signOut()} disabled={signingOut}>{signingOut ? 'Signing out…' : 'Sign out'}</Button></div></Navbar.Collapse>
     </Container></Navbar>
     <main><Container className="main-content">
       {error && <Alert variant="danger" dismissible onClose={() => setError('')}>{error}</Alert>}
@@ -60,6 +61,7 @@ function ProtectedApp() {
         <Route path="/categories" element={<CategoriesPage />} />
         <Route path="/transactions" element={<TransactionsPage />} />
         <Route path="/statements" element={<StatementsPage />} />
+        <Route path="/account" element={<AccountPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes></ErrorBoundary>
       <footer>DollarShark <span>·</span> Personal finance, made clearer.</footer>

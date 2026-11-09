@@ -99,6 +99,12 @@ Restart the API. How accounts are matched:
 - If an **unconfirmed** account has that email, its password is removed before linking, because whoever registered it never proved they own the address. This blocks "pre-registration" account takeovers.
 - Google accounts whose email Google has not verified are refused.
 
+## Deleting an account
+
+Users can permanently delete their account from **Account** (click your email in the top bar) → *Danger zone*. `POST /api/auth/delete-account` requires typing `DELETE` plus the current password, or, for Google-only accounts, the account email — so a stolen session alone can't wipe an account. Wrong-password attempts count towards lockout and the sign-in rate limit.
+
+In one database transaction it removes the user's transactions (linked transfers first), statement records, rules, private categories, financial accounts and the Identity user (including Google login links); shared default categories and other users are untouched. Stored statement files are deleted after the commit. A file that can't be removed is logged by storage key for manual cleanup, never with user data. Backups made before the deletion still contain the old data until they expire; mention this in your privacy notice.
+
 ## Production configuration
 
 Settings the API needs outside Development (environment variables use `__` for `:`, e.g. `DataProtection__KeysPath`):
