@@ -1,0 +1,97 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DollarShark CI (Continuous Integration)
+#
+# GitHub reads every .yml file in .github/workflows/. This one runs on GitHub's
+# servers ("runners") whenever a pull request targets main, or main changes.
+# If any step fails, the PR shows a red ✗ and you know before merging.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+# WHEN to run.
+on:
+  pull_request:
+    branches: [main]        # every PR into main gets checked
+  push:
+    branches: [main]        # and main itself after a merge
+  workflow_dispatch:        # adds a "Run workflow" button in the Actions tab
+
+# Least privilege: this workflow only needs to read the code.
+permissions:
+  contents: read
+
+# If you push again to the same PR, cancel the older, now-outdated run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# WHAT to run. Jobs run in parallel on separate fresh machines.
+jobs:
+  backend:
+    name: Backend (build + tests)
+    runs-on: ubuntu-latest   # a clean Linux VM, created and thrown away each run
+    timeout-minutes: 15      # safety net if something hangs
+    steps:
+      # 1. Download the repository's code onto the runner.
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # 2. Install the same .NET SDK major version we use locally.
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # 3. Download NuGet packages (separate step so failures are easy to spot).
+      - name: Restore packages
+        run: dotnet restore backend/DollarShark.sln
+
+      # 4. Compile in Release mode. --no-restore reuses step 3.
+      - name: Build
+        run: dotnet build backend/DollarShark.sln --configuration Release --no-restore
+
+      # 5. Run all xUnit tests (SQLite in-memory; no SQL Server needed).
+      - name: Test
+        run: >
+          dotnet test backend/DollarShark.sln --configuration Release --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory test-results
+
+      # 6. Keep the test report even when tests fail, so you can download it.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: test-results
+          retention-days: 7
+
+  frontend:
+    name: Frontend (lint + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend   # every "run:" below starts inside frontend/
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Install Node and cache npm downloads between runs (faster CI).
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # "npm ci" installs exactly what package-lock.json says (reproducible; never edits the lock file).
+      - name: Install dependencies
+        run: npm ci
+
+      # ESLint: catches bugs and style problems.
+      - name: Lint
+        run: npm run lint
+
+      # TypeScript type-check + Vite production build. Fails on any type error.
+      - name: Build
+        run: npm run build
