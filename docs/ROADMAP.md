@@ -39,7 +39,7 @@ Hosting choice: **AWS Lightsail + Docker Compose + SQL Server Express container 
 - [x] First-run guide: add account → upload statement → review
 
 **Quality**
-- [ ] CI pipeline: GitHub Action running `dotnet test`, frontend build and lint on every PR
+- [x] CI pipeline: GitHub Action running `dotnet test`, frontend build and lint on every PR
 - [ ] Update the docs: README "out of scope" list, `architecture.md` (multi-user + auth), short deployment guide
 
 Suggested PRs: (1) production setup + error handling + upload limit → (2) CI → (3) delete account → (4) auto-categorization + first-run guide → (5) docs.

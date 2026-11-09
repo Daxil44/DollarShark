@@ -1,5 +1,7 @@
 # DollarShark
 
+[![CI](https://github.com/Daxil44/DollarShark/actions/workflows/ci.yml/badge.svg)](https://github.com/Daxil44/DollarShark/actions/workflows/ci.yml)
+
 DollarShark is a personal finance app with email/password accounts, cookie-based sessions, CSRF protection, and per-user isolation for financial records. Each user sees their own accounts, transactions, and private categories; read-only default categories are shared.
 
 ## Prerequisites
@@ -157,6 +159,23 @@ New users also see a **getting started** checklist on the Dashboard (add account
 The dashboard endpoint defaults to the full current UTC calendar month. Supply both `from` and `to` for a custom inclusive date range. Full calendar months compare with the previous calendar month; other ranges compare with the immediately preceding range of the same number of days. Totals are returned separately per transaction currency; no currency conversion is performed. Negative non-transfer amounts contribute to positive-valued expense totals, positive non-transfer amounts (including refunds) contribute to income, and explicitly typed transfers are excluded from all cash-flow totals. Recent transactions are limited to the selected period and sorted newest first with a deterministic ID tie-breaker.
 
 Transactions accept year, month, accountId, categoryId, transactionType, search, from, to, sortBy, sortDirection, page, and pageSize query parameters. Results include pagination metadata; page size is limited to 100.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request into `main`, on every push to `main`, and on demand (Actions tab → CI → *Run workflow*). Two jobs run in parallel on fresh Ubuntu machines:
+
+- **Backend:** restore → Release build → all xUnit tests (test report kept as a downloadable artifact for 7 days).
+- **Frontend:** `npm ci` → `npm run lint` → `npm run build` (TypeScript check + Vite build).
+
+To reproduce a CI failure locally, run the same commands:
+
+~~~powershell
+dotnet build backend/DollarShark.sln --configuration Release
+dotnet test backend/DollarShark.sln --configuration Release --no-build
+cd frontend; npm ci; npm run lint; npm run build
+~~~
+
+Recommended: in GitHub → Settings → Branches, add a rule for `main` that requires the **Backend (build + tests)** and **Frontend (lint + build)** checks to pass before merging.
 
 ## Build and tests
 
