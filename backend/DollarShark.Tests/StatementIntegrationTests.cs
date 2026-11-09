@@ -573,6 +573,61 @@ public sealed class StatementIntegrationTests
     }
 
     [Fact]
+    public async Task DeletingAnAccountRemovesAllOfTheUsersDataAndFilesButNobodyElses()
+    {
+        await using var factory = new StatementApiFactory();
+        using var userA = factory.CreateClient();
+        using var userB = factory.CreateClient();
+        var (csrfA, chequingA) = await RegisterAndCreateAccount(userA, "delete-me@example.test");
+        var (csrfB, accountB) = await RegisterAndCreateAccount(userB, "keep-me@example.test");
+        var userIdA = (await userA.GetFromJsonAsync<JsonElement>("/api/auth/me")).GetProperty("id").GetString()!;
+        var userIdB = (await userB.GetFromJsonAsync<JsonElement>("/api/auth/me")).GetProperty("id").GetString()!;
+
+        // Give user A one of everything, including rows that reference each other.
+        var savingsA = (await (await PostJson(userA, "/api/accounts", new { name = "Savings", institution = "Bank", accountType = "Savings", currency = "CAD", lastFourDigits = "" }, csrfA)).Content.ReadFromJsonAsync<AccountDto>())!.Id;
+        var parent = await (await PostJson(userA, "/api/categories", new { name = "Fun", parentCategoryId = (Guid?)null }, csrfA)).Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(HttpStatusCode.Created, (await PostJson(userA, "/api/categories", new { name = "Games", parentCategoryId = parent.GetProperty("id").GetGuid() }, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostJson(userA, "/api/category-rules", new { pattern = "STEAM", matchType = "Contains", categoryId = parent.GetProperty("id").GetGuid() }, csrfA)).StatusCode);
+        var outgoing = (await (await PostJson(userA, "/api/transactions", new { transactionDate = "2026-10-01", description = "To savings", amount = -100m, transactionType = "Transfer", financialAccountId = chequingA, categoryId = (Guid?)null }, csrfA)).Content.ReadFromJsonAsync<TransactionCreatedDto>())!.Id;
+        var incoming = (await (await PostJson(userA, "/api/transactions", new { transactionDate = "2026-10-01", description = "From chequing", amount = 100m, transactionType = "Transfer", financialAccountId = savingsA, categoryId = (Guid?)null }, csrfA)).Content.ReadFromJsonAsync<TransactionCreatedDto>())!.Id;
+        Assert.Equal(HttpStatusCode.OK, (await PostJson(userA, "/api/transfers/link", new { outgoingTransactionId = outgoing, incomingTransactionId = incoming }, csrfA)).StatusCode);
+        var csv = Encoding.UTF8.GetBytes("Date,Description,Amount\n2026-10-20,Coffee,-4.25\n");
+        Assert.Equal(HttpStatusCode.Created, (await Upload(userA, chequingA, "a.csv", csv, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await Upload(userB, accountB, "b.csv", csv, csrfB)).StatusCode);
+        Assert.Equal(2, Directory.GetFiles(factory.StorageRoot, "*", SearchOption.AllDirectories).Length);
+
+        // Safety checks: wrong password or a missing DELETE confirmation removes nothing.
+        Assert.Equal(HttpStatusCode.BadRequest, (await PostJson(userA, "/api/auth/delete-account", new { password = "WrongPassword123!", confirmation = "DELETE" }, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await PostJson(userA, "/api/auth/delete-account", new { password = Password, confirmation = "delete" }, csrfA)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await userA.GetAsync("/api/auth/me")).StatusCode);
+
+        var deleted = await PostJson(userA, "/api/auth/delete-account", new { password = Password, confirmation = "DELETE" }, csrfA);
+        Assert.True(deleted.StatusCode == HttpStatusCode.NoContent, await deleted.Content.ReadAsStringAsync());
+
+        // User A is gone everywhere: database rows, files, session and sign-in.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<FinanceDbContext>();
+            Assert.False(await db.Users.AnyAsync(x => x.Id == userIdA));
+            Assert.False(await db.Transactions.AnyAsync(x => x.UserId == userIdA));
+            Assert.False(await db.FinancialAccounts.AnyAsync(x => x.UserId == userIdA));
+            Assert.False(await db.Categories.AnyAsync(x => x.UserId == userIdA));
+            Assert.False(await db.CategoryRules.AnyAsync(x => x.UserId == userIdA));
+            Assert.False(await db.StatementImports.AnyAsync(x => x.UserId == userIdA));
+            Assert.True(await db.Categories.AnyAsync(x => x.IsSystem));
+            Assert.True(await db.StatementImports.AnyAsync(x => x.UserId == userIdB));
+            Assert.True(await db.FinancialAccounts.AnyAsync(x => x.UserId == userIdB));
+        }
+        Assert.Single(Directory.GetFiles(factory.StorageRoot, "*", SearchOption.AllDirectories));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await userA.GetAsync("/api/auth/me")).StatusCode);
+        var relogin = await PostJson(userA, "/api/auth/login", new { email = "delete-me@example.test", password = Password }, await GetCsrf(userA));
+        Assert.Equal(HttpStatusCode.Unauthorized, relogin.StatusCode);
+
+        // User B still works normally.
+        Assert.Equal(HttpStatusCode.OK, (await userB.GetAsync("/api/statements")).StatusCode);
+    }
+
+    [Fact]
     public async Task StatementUploadsAreRateLimitedPerUser()
     {
         await using var factory = new StatementApiFactory(uploadPermitLimit: 2);

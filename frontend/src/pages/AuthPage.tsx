@@ -21,6 +21,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const destination = typeof from === 'string' ? from : from?.pathname ? `${from.pathname}${from.search ?? ''}${from.hash ?? ''}` : '/dashboard';
   const notice = (location.state as { notice?: string } | null)?.notice;
   const googleFailed = new URLSearchParams(location.search).get('error') === 'google';
+  const accountDeleted = new URLSearchParams(location.search).get('deleted') === '1';
   const [googleEnabled, setGoogleEnabled] = useState(false);
 
   useEffect(() => {
@@ -84,6 +85,7 @@ export default function AuthPage({ mode }: { mode: 'login' | 'register' }) {
     <h1 className="h3 fw-bold">{isRegister ? 'Create your account' : 'Welcome back'}</h1>
     <p className="text-secondary">{isRegister ? 'Your finance data will be private to your account.' : 'Sign in to see your private finance workspace.'}</p>
     {notice && !error && !unconfirmed && <Alert variant="success">{notice}</Alert>}
+    {accountDeleted && !error && <Alert variant="success">Your account and all of its data have been permanently deleted.</Alert>}
     {googleFailed && !error && <Alert variant="danger">Google sign-in didn't complete. Try again, or use your email and password.</Alert>}
     {googleEnabled && <GoogleButton href={`${api.defaults.baseURL}/api/auth/external/google`} />}
     {error && <Alert variant="danger">{error}</Alert>}

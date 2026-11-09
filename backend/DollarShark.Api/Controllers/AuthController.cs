@@ -277,6 +277,45 @@ public sealed class AuthController(
         return user is null ? Unauthorized() : Ok(ToProfile(user));
     }
 
+    /// <summary>
+    /// Permanently deletes the signed-in user's account and all their data. Requires typing DELETE plus the
+    /// current password (or, for Google-only accounts, the account email) so a stolen session alone can't do it.
+    /// </summary>
+    [HttpPost("delete-account")]
+    [Authorize]
+    [EnableRateLimiting(LoginRateLimitPolicy)]
+    public async Task<IActionResult> DeleteAccount(DeleteAccountRequest request, [FromServices] AccountDeletionService deletion, CancellationToken cancellationToken)
+    {
+        var user = await users.GetUserAsync(User);
+        if (user is null) return Unauthorized();
+
+        if (!string.Equals(request.Confirmation?.Trim(), "DELETE", StringComparison.Ordinal))
+            return Invalid("confirmation", "Type DELETE (in capital letters) to confirm.");
+
+        if (await users.HasPasswordAsync(user))
+        {
+            var check = string.IsNullOrEmpty(request.Password)
+                ? Microsoft.AspNetCore.Identity.SignInResult.Failed
+                : await signInManager.CheckPasswordSignInAsync(user, request.Password, lockoutOnFailure: true);
+            if (check.IsLockedOut) return Invalid("password", "Too many wrong passwords. Try again in 15 minutes.");
+            if (!check.Succeeded) return Invalid("password", "Password is incorrect.");
+        }
+        else if (!string.Equals(request.ConfirmEmail?.Trim(), user.Email, StringComparison.OrdinalIgnoreCase))
+        {
+            return Invalid("confirmEmail", "Type your account email address to confirm.");
+        }
+
+        var result = await deletion.DeleteAsync(user, cancellationToken);
+        if (!result.Succeeded)
+            return Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Your account could not be deleted. Nothing was removed; please try again.");
+
+        await signInManager.SignOutAsync();
+        return NoContent();
+    }
+
+    private BadRequestObjectResult Invalid(string field, string message) =>
+        BadRequest(new ValidationProblemDetails(new Dictionary<string, string[]> { [field] = [message] }));
+
     private async Task QueueConfirmationEmail(ApplicationUser user)
     {
         if (user.Email is null) return;
@@ -310,7 +349,7 @@ public sealed class AuthController(
         }
     }
 
-    private static UserProfile ToProfile(ApplicationUser user) => new(user.Id, user.Email ?? string.Empty);
+    private static UserProfile ToProfile(ApplicationUser user) => new(user.Id, user.Email ?? string.Empty, user.PasswordHash is not null);
 
     private IActionResult InvalidCredentials() =>
         Unauthorized(new ProblemDetails { Status = StatusCodes.Status401Unauthorized, Title = "Email or password is incorrect." });
@@ -330,4 +369,5 @@ public sealed record EmailOnlyRequest(string? Email);
 public sealed record ConfirmEmailRequest(string? UserId, string? Token);
 public sealed record ResetPasswordRequest(string? UserId, string? Token, string? Password);
 public sealed record RegistrationPending(bool RequiresEmailConfirmation, string Email);
-public sealed record UserProfile(string Id, string Email);
+public sealed record UserProfile(string Id, string Email, bool HasPassword = true);
+public sealed record DeleteAccountRequest(string? Password, string? ConfirmEmail, string? Confirmation);

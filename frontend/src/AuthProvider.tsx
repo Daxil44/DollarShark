@@ -35,6 +35,11 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       await refreshCsrfToken();
     },
+    async deleteAccount(input) {
+      await api.post('/api/auth/delete-account', input);
+      // Full reload: clears every bit of in-memory state and lands on sign-in with a confirmation message.
+      window.location.replace('/login?deleted=1');
+    },
   }), [user, checking]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
