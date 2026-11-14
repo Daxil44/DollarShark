@@ -1,0 +1,29 @@
+# SITE_ADDRESS is your domain in production (e.g. dollarshark.duckdns.org) — Caddy then gets and renews
+# a free HTTPS certificate automatically. Locally it defaults to ":80" (plain http).
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	request_body {
+		max_size 16MB
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# API, Google sign-in callback and health check go to the API container.
+	@api path /api/* /signin-google* /health
+	handle @api {
+		reverse_proxy api:8080
+	}
+
+	# Everything else is the React app; unknown paths fall back to index.html (client-side routes).
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

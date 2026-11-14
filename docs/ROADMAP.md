@@ -40,7 +40,7 @@ Hosting choice: **AWS Lightsail + Docker Compose + SQL Server Express container 
 
 **Quality**
 - [x] CI pipeline: GitHub Action running `dotnet test`, frontend build and lint on every PR
-- [ ] Update the docs: README "out of scope" list, `architecture.md` (multi-user + auth), short deployment guide
+- [x] Update the docs: README "out of scope" list, `architecture.md` (multi-user + auth), short deployment guide
 
 Suggested PRs: (1) production setup + error handling + upload limit → (2) CI → (3) delete account → (4) auto-categorization + first-run guide → (5) docs.
 
@@ -54,12 +54,12 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 
 ### Stage 3 — Dockerize DollarShark *(hosting Phase 1)*
 
-- [ ] Production Dockerfile for the ASP.NET Core API
-- [ ] Nginx image serving the built React app and proxying `/api` to the API (same origin)
-- [ ] SQL Server Express container (`MSSQL_PID=Express`)
-- [ ] Docker Compose with persistent volumes: database, statement files, data-protection keys
-- [ ] Database migration step as part of deployment
-- [ ] Test the complete application locally
+- [x] Production Dockerfile for the ASP.NET Core API
+- [x] Web image serving the built React app and proxying `/api` to the API (same origin) — Caddy instead of Nginx: automatic HTTPS
+- [x] SQL Server Express container (`MSSQL_PID=Express`)
+- [x] Docker Compose with persistent volumes: database, statement files, data-protection keys
+- [x] Database migration step as part of deployment (API migrates on startup when `Database:MigrateOnStartup=true`)
+- [x] Test the complete application locally (http + HTTPS through Caddy)
 
 **Done when:** `docker compose up` runs the whole app locally.
 
