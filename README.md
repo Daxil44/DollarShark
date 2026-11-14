@@ -2,7 +2,27 @@
 
 [![CI](https://github.com/Daxil44/DollarShark/actions/workflows/ci.yml/badge.svg)](https://github.com/Daxil44/DollarShark/actions/workflows/ci.yml)
 
-DollarShark is a personal finance app with email/password accounts, cookie-based sessions, CSRF protection, and per-user isolation for financial records. Each user sees their own accounts, transactions, and private categories; read-only default categories are shared.
+DollarShark is a multi-user personal finance app: import bank and credit card statements, catch duplicates, link transfers, auto-categorize spending and see where your money goes. Each user's data is private to their account; read-only default categories are shared.
+
+**Stack:** ASP.NET Core (.NET 10) API · EF Core + SQL Server · React 19 + TypeScript + Vite · xUnit tests · GitHub Actions CI.
+
+## Features
+
+- **Accounts & transactions:** chequing, savings, credit card and investment accounts with opening balances; transactions with filters, search, sorting and paging; soft account deactivation.
+- **Statement import:** private upload of CSV/PDF/XLSX files; CSV preview with validation, duplicate detection with manual review, then confirmed import (Scotiabank and Amex formats supported).
+- **Auto-categorization:** your own "description contains X → category" rules, ~90 one-click common Canadian merchants, pre-filled during import and applicable to existing transactions.
+- **Transfers:** suggested matches between accounts and manual linking, kept out of income/expense totals.
+- **Dashboards:** overview, cash flow and balances tabs; per-account dashboards, balance history, savings rate and spending insights; per-currency totals.
+- **Accounts & security:** email/password with email confirmation and password reset, optional Continue with Google, HttpOnly cookie sessions, CSRF protection, lockout and rate limits, per-user data isolation, and self-service account deletion.
+- **Onboarding:** public landing page and a first-run checklist on the dashboard.
+
+## Documentation
+
+| Document | What's in it |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | How the code is organized, data model rules, security model, request and import flows |
+| [docs/deployment.md](docs/deployment.md) | What production needs, configuration, the AWS Lightsail plan and a go-live checklist |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | What's done and what's next, stage by stage |
 
 ## Prerequisites
 
@@ -18,19 +38,30 @@ Set the SQL Server connection string in .NET User Secrets. Replace YOUR_SERVER\Y
 dotnet user-secrets set "ConnectionStrings:FinanceDb" "Server=YOUR_SERVER\YOUR_INSTANCE;Database=DollarShark;Trusted_Connection=True;TrustServerCertificate=True;" --project backend/DollarShark.Api
 ~~~
 
-Apply the checked-in migrations explicitly. The migrations preserve existing tables and rows. Phase 2.5 adds ASP.NET Core Identity tables and nullable owner columns; existing financial rows stay unassigned and are hidden from signed-in users until deliberately backfilled. No user is selected automatically.
+Apply the checked-in migrations explicitly, and again whenever you pull changes that add a migration. Migrations preserve existing tables and rows.
 
 ~~~powershell
 .\.tools\dotnet-ef.exe database update --project backend/DollarShark.Infrastructure --startup-project backend/DollarShark.Api
 ~~~
 
-The API does not update the database automatically. After migration, start the app and register the intended initial user. If the database already has Phase 1/2 finance records, open `docs/phase-2-5-backfill.sql` in VS Code with the MSSQL extension, replace the placeholder email, select the intended SQL Server connection/database, and run it. The script changes only rows whose `UserId` is null, leaves shared default categories unowned, and reports how many legacy records it assigned. Inspect the email and selected database before running the script. A fresh database has no legacy finance rows, so no backfill is needed.
+The API does not update the database automatically. After migration, start the app and register your first user.
 
-Phase 3.1 adds a `StatementImports` table through a new migration. It does not modify previous migrations or migrate the SQL Server database automatically.
+**Upgrading a very old (pre-authentication) database:** finance rows created before user accounts existed have no owner and stay hidden. To assign them to a user, open `docs/phase-2-5-backfill.sql` in VS Code with the MSSQL extension, replace the placeholder email, select the intended SQL Server connection/database, and run it. The script changes only rows whose `UserId` is null, leaves shared default categories unowned, and reports how many legacy records it assigned. Inspect the email and selected database before running the script. A fresh database has no legacy finance rows, so no backfill is needed.
 
 ## Run from Visual Studio
 
 Open backend/DollarShark.sln, select the DollarShark Full Stack launch profile, and press F5. The API listens on http://localhost:5017. Its configured SPA proxy starts Vite on http://localhost:5173. Open that Vite URL in your browser. Run npm install in frontend once if dependencies are not installed yet. Register an account or sign in; finance pages redirect anonymous users to login.
+
+## Run with Docker (production-like)
+
+Runs the whole app — SQL Server Express, API and website — in containers, exactly as on the server:
+
+~~~powershell
+copy .env.example .env      # fill in values; the comments show local-test settings
+docker compose --profile local up -d --build
+~~~
+
+Open http://localhost:8088 (emails land in Mailpit at http://localhost:8025). Deploying to AWS Lightsail: see [docs/deployment.md](docs/deployment.md).
 
 ## Run from a terminal
 
@@ -137,7 +168,7 @@ Unhandled server errors return a ProblemDetails body with a friendly title and a
 - Optional `StatementCsv:MaxRows` defaults to 10,000 (permitted configuration range 1–100,000). Parsing also enforces the configured statement file-size limit. Invalid values and wrong-width rows are returned with row diagnostics; empty files, invalid UTF-8, malformed quoting, missing/ambiguous columns, and limit violations return a clear error.
 - PDF and XLSX uploads remain stored but cannot be preview-parsed. CSV previews are temporary responses; they are not persisted.
 
-Registration requires email confirmation and supports password reset (see above). Sign-in is rate limited per IP; MFA is not implemented yet. Configure HTTPS, a production data-protection key store, exact frontend origin, database backups, and monitoring before exposing it publicly.
+Before exposing the app publicly, follow [docs/deployment.md](docs/deployment.md) (HTTPS, persistent data-protection keys, exact frontend origin, real email, backups and monitoring).
 
 To create optional demo data for your own account, replace the email placeholder in `docs/sample-data.sql` with the email you registered, then run the script against the DollarShark database. It adds a sample account, private category, and three transactions; rerunning it does not duplicate those sample transactions.
 
@@ -207,4 +238,7 @@ The tests use SQLite in-memory relational databases for integration behavior. Th
 - Account deactivation is soft; transaction history stays associated.
 - A category in use by transactions or child categories cannot be deleted.
 - Account records store only optional last four digits. Never enter full card numbers, CVVs, banking credentials, or account passwords.
-- Statement parsing/extraction, automatic categorization, analytics, Telegram, AWS deployment, budgeting, investments, credit card reconciliation, and automatic transfer matching are out of scope.
+- Totals are kept per currency; no exchange-rate conversion is done.
+- Transfer suggestions never link anything automatically; you confirm each pair.
+
+**Not built yet** (see [docs/ROADMAP.md](docs/ROADMAP.md)): PDF and XLSX statement parsing, more bank CSV formats and column mapping, CSV export, receipts and OCR, budgets, recurring-charge detection, two-factor login, and Telegram integration.

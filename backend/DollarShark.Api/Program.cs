@@ -90,14 +90,18 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
     .AddEntityFrameworkStores<FinanceDbContext>()
     .AddDefaultTokenProviders();
 
+// Outside Development, cookies are HTTPS-only. Https:SecureCookies=false exists only for testing the production
+// Docker build on plain http://localhost; never turn it off on a real server.
+var secureCookiePolicy = builder.Configuration.GetValue("Https:SecureCookies", !builder.Environment.IsDevelopment())
+    ? CookieSecurePolicy.Always
+    : CookieSecurePolicy.SameAsRequest;
+
 builder.Services.ConfigureApplicationCookie(options =>
 {
     options.Cookie.Name = "DollarShark.Session";
     options.Cookie.HttpOnly = true;
     options.Cookie.SameSite = SameSiteMode.Lax;
-    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
-        ? CookieSecurePolicy.SameAsRequest
-        : CookieSecurePolicy.Always;
+    options.Cookie.SecurePolicy = secureCookiePolicy;
     options.ExpireTimeSpan = TimeSpan.FromHours(8);
     options.SlidingExpiration = true;
     options.Events.OnRedirectToLogin = context =>
@@ -118,9 +122,7 @@ builder.Services.AddAntiforgery(options =>
     options.Cookie.Name = "DollarShark.Antiforgery";
     options.Cookie.HttpOnly = true;
     options.Cookie.SameSite = SameSiteMode.Lax;
-    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
-        ? CookieSecurePolicy.SameAsRequest
-        : CookieSecurePolicy.Always;
+    options.Cookie.SecurePolicy = secureCookiePolicy;
 });
 
 var allowedFrontendOrigin = builder.Environment.IsDevelopment()
@@ -143,7 +145,7 @@ if (!string.IsNullOrWhiteSpace(googleClientId) && !string.IsNullOrWhiteSpace(goo
         options.SignInScheme = IdentityConstants.ExternalScheme;
         // Google returns with a top-level GET redirect, so Lax is enough and also works on http://localhost.
         options.CorrelationCookie.SameSite = SameSiteMode.Lax;
-        options.CorrelationCookie.SecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
+        options.CorrelationCookie.SecurePolicy = secureCookiePolicy;
         options.ClaimActions.MapJsonKey(AuthController.GoogleEmailVerifiedClaim, "verified_email");
         options.ClaimActions.MapJsonKey(AuthController.GoogleEmailVerifiedClaim, "email_verified");
     });
@@ -284,6 +286,28 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
 });
 
 var app = builder.Build();
+
+// Opt-in for single-server Docker deployments: apply pending EF migrations at startup.
+// Off by default (local dev and tests migrate explicitly). The database container may still be starting, so retry briefly.
+if (app.Configuration.GetValue("Database:MigrateOnStartup", false))
+{
+    var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DatabaseMigration");
+    for (var attempt = 1; ; attempt++)
+    {
+        try
+        {
+            using var scope = app.Services.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<FinanceDbContext>().Database.MigrateAsync();
+            startupLogger.LogInformation("Database migrations are up to date.");
+            break;
+        }
+        catch (Exception exception) when (attempt < 12 && exception is Microsoft.Data.SqlClient.SqlException or InvalidOperationException)
+        {
+            startupLogger.LogWarning("Database not ready (attempt {Attempt}/12): {Message}", attempt, exception.Message);
+            await Task.Delay(TimeSpan.FromSeconds(5));
+        }
+    }
+}
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
