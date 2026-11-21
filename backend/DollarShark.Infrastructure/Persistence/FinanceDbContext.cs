@@ -17,7 +17,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.Entity<ApplicationUser>().HasIndex(x => x.NormalizedEmail)
-            .HasDatabaseName("EmailIndex").IsUnique().HasFilter("[NormalizedEmail] IS NOT NULL");
+            .HasDatabaseName("EmailIndex").IsUnique().HasFilter("\"NormalizedEmail\" IS NOT NULL");
         var account = modelBuilder.Entity<FinancialAccount>();
         account.HasKey(x => x.Id);
         account.Property(x => x.Name).HasMaxLength(120).IsRequired();
@@ -26,7 +26,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         account.Property(x => x.Currency).HasMaxLength(3).IsRequired();
         account.Property(x => x.OpeningBalance).HasPrecision(19, 4);
         account.Property(x => x.LastFourDigits).HasMaxLength(4);
-        account.ToTable(table => table.HasCheckConstraint("CK_FinancialAccounts_OpeningBalance", "([OpeningBalance] IS NULL AND [OpeningBalanceDate] IS NULL) OR ([OpeningBalance] IS NOT NULL AND [OpeningBalanceDate] IS NOT NULL)"));
+        account.ToTable(table => table.HasCheckConstraint("CK_FinancialAccounts_OpeningBalance", "(\"OpeningBalance\" IS NULL AND \"OpeningBalanceDate\" IS NULL) OR (\"OpeningBalance\" IS NOT NULL AND \"OpeningBalanceDate\" IS NOT NULL)"));
         account.HasIndex(x => new { x.Institution, x.Name });
         account.Property(x => x.UserId).HasMaxLength(450);
         account.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
@@ -37,7 +37,7 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         category.Property(x => x.Name).HasMaxLength(80).IsRequired();
         category.Property(x => x.UserId).HasMaxLength(450);
         category.HasIndex(x => new { x.UserId, x.ParentCategoryId, x.Name }).IsUnique()
-            .HasFilter("[UserId] IS NOT NULL");
+            .HasFilter("\"UserId\" IS NOT NULL");
         category.HasIndex(x => x.UserId);
         category.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         category.HasOne(x => x.ParentCategory).WithMany(x => x.Children)
@@ -57,11 +57,11 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
             .HasDefaultValue(TransactionType.Expense);
         transaction.HasIndex(x => new { x.FinancialAccountId, x.TransactionDate });
         transaction.HasIndex(x => x.LinkedTransferTransactionId).IsUnique()
-            .HasFilter("[LinkedTransferTransactionId] IS NOT NULL");
+            .HasFilter("\"LinkedTransferTransactionId\" IS NOT NULL");
         transaction.HasIndex(x => x.CategoryId);
         transaction.HasIndex(x => x.UserId);
         transaction.HasIndex(x => new { x.FinancialAccountId, x.ExternalReference })
-            .HasFilter("[ExternalReference] IS NOT NULL");
+            .HasFilter("\"ExternalReference\" IS NOT NULL");
         transaction.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         transaction.HasOne(x => x.FinancialAccount).WithMany(x => x.Transactions)
             .HasForeignKey(x => x.FinancialAccountId).OnDelete(DeleteBehavior.Cascade);

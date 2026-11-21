@@ -13,7 +13,7 @@ flowchart LR
         S["Application services<br/>(DollarShark.Application)"]
         R["Repositories & storage<br/>(DollarShark.Infrastructure)"]
     end
-    DB[("SQL Server<br/>EF Core")]
+    DB[("PostgreSQL<br/>EF Core (Npgsql)")]
     Files[("Private statement<br/>file storage")]
     Mail["SMTP<br/>(Gmail / SES)"]
     Google["Google OAuth<br/>(optional)"]
@@ -31,7 +31,7 @@ flowchart LR
 |---|---|---|
 | `DollarShark.Domain` | Entities and pure rules: `FinancialAccount`, `Transaction` (balance effects), `Category`, `CategoryRule` (matching), `StatementImport`, `LinkedTransferRules` | nothing |
 | `DollarShark.Application` | Use cases, validation and DTOs (`*Contracts.cs`): accounts, categories, rules, transactions, transfers, statements, dashboard; `UseCaseResult<T>` for success/validation/not-found/conflict | Domain |
-| `DollarShark.Infrastructure` | EF Core `FinanceDbContext` + migrations, repositories, Identity user, statement CSV parser, file validator, local private file storage, account deletion | Application, Domain |
+| `DollarShark.Infrastructure` | EF Core `FinanceDbContext` (PostgreSQL via Npgsql) + migrations, repositories, Identity user, statement CSV parser, file validator, local private file storage, account deletion | Application, Domain |
 | `DollarShark.Api` | Composition root (`Program.cs`), controllers, security filters, email sending, rate limits, error handling | all of the above |
 | `DollarShark.Tests` | xUnit unit and integration tests (in-memory SQLite) | all of the above |
 | `frontend/` | React 19 + TypeScript SPA | the API over HTTP |
