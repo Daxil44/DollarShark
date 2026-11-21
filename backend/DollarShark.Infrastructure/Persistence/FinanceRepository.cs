@@ -84,7 +84,7 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
         VisibleCategories().AnyAsync(x => x.Id == id, cancellationToken);
 
     public Task<bool> NameExistsAsync(string name, Guid? parentId, Guid? exceptId, CancellationToken cancellationToken) =>
-        VisibleCategories().AnyAsync(x => x.Name == name && x.ParentCategoryId == parentId && (!exceptId.HasValue || x.Id != exceptId.Value), cancellationToken);
+        VisibleCategories().AnyAsync(x => x.Name.ToLower() == name.ToLower() && x.ParentCategoryId == parentId && (!exceptId.HasValue || x.Id != exceptId.Value), cancellationToken);
 
     public async Task<bool> WouldCreateCycleAsync(Guid categoryId, Guid? proposedParentId, CancellationToken cancellationToken)
     {
@@ -122,8 +122,12 @@ public sealed class FinanceRepository(FinanceDbContext db, ICurrentUserContext c
         if (filter.CategoryId is Guid categoryId) query = query.Where(x => x.CategoryId == categoryId);
         if (filter.Type is TransactionType type) query = query.Where(x => x.TransactionType == type);
         if (!string.IsNullOrWhiteSpace(filter.Search))
-            query = query.Where(x => x.Description.Contains(filter.Search) ||
-                (x.SubDescription != null && x.SubDescription.Contains(filter.Search)));
+        {
+            // Case-insensitive on every database (PostgreSQL compares text case-sensitively by default).
+            var search = filter.Search.ToLower();
+            query = query.Where(x => x.Description.ToLower().Contains(search) ||
+                (x.SubDescription != null && x.SubDescription.ToLower().Contains(search)));
+        }
         if (filter.From is DateOnly from) query = query.Where(x => x.TransactionDate >= from);
         if (filter.To is DateOnly to) query = query.Where(x => x.TransactionDate <= to);
 

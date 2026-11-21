@@ -2,7 +2,7 @@
 
 One path from today to v1 (friends can use it) and beyond. Work top to bottom; move on when a stage's **Done when** is true. Tick boxes as items land.
 
-Hosting choice: **AWS Lightsail + Docker Compose + SQL Server Express container + Nginx**, S3 for files and backups, GitHub Actions for CI/CD. Keep costs low: set an AWS budget alert before creating anything.
+Hosting choice: **AWS Lightsail + Docker Compose + PostgreSQL container + Caddy (automatic HTTPS)**, S3 for files and backups, GitHub Actions for CI/CD. Keep costs low: set an AWS budget alert before creating anything.
 
 ---
 
@@ -56,7 +56,7 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 
 - [x] Production Dockerfile for the ASP.NET Core API
 - [x] Web image serving the built React app and proxying `/api` to the API (same origin) — Caddy instead of Nginx: automatic HTTPS
-- [x] SQL Server Express container (`MSSQL_PID=Express`)
+- [x] PostgreSQL container (moved from SQL Server Express, which needs ≥ 2 GB RAM)
 - [x] Docker Compose with persistent volumes: database, statement files, data-protection keys
 - [x] Database migration step as part of deployment (API migrates on startup when `Database:MigrateOnStartup=true`)
 - [x] Test the complete application locally (http + HTTPS through Caddy)
@@ -69,7 +69,7 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 - [ ] Environment variables and secrets (DB password, SMTP, Google keys) — never in git
 - [ ] Frontend production build uses same-origin API URLs
 - [ ] Verify secure cookies, CSRF and CORS in production mode
-- [ ] SQL Server not publicly exposed (no published port 1433)
+- [x] Database not publicly exposed (no published port)
 - [ ] Verify authentication and multi-user isolation
 
 **Done when:** the Docker stack runs in Production mode and two accounts cannot see each other's data.
@@ -78,7 +78,7 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 
 - [ ] Create AWS account and a billing budget alert (e.g. $5/month)
 - [ ] Understand IAM; use an IAM user/role instead of the root account
-- [ ] Create a Lightsail Ubuntu instance with at least 2 GB RAM (SQL Server needs it; 4 GB is comfortable)
+- [ ] Create a Lightsail Ubuntu instance (1 GB RAM is enough with PostgreSQL; 2 GB is smoother)
 - [ ] Static IP, SSH key access, firewall (only 22, 80, 443)
 - [ ] Basic Linux server administration
 - [ ] Install Docker and Docker Compose

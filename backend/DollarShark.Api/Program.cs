@@ -71,9 +71,9 @@ builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLi
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = maxStatementSizeBytes + 1024 * 1024);
 
 builder.Services.AddDbContext<FinanceDbContext>(options =>
-    options.UseSqlServer(
+    options.UseNpgsql(
         builder.Configuration.GetConnectionString("FinanceDb"),
-        sql => sql.MigrationsAssembly("DollarShark.Infrastructure")));
+        npgsql => npgsql.MigrationsAssembly("DollarShark.Infrastructure")));
 
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
     {
@@ -301,7 +301,7 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", false))
             startupLogger.LogInformation("Database migrations are up to date.");
             break;
         }
-        catch (Exception exception) when (attempt < 12 && exception is Microsoft.Data.SqlClient.SqlException or InvalidOperationException)
+        catch (Exception exception) when (attempt < 12 && exception is Npgsql.NpgsqlException or InvalidOperationException)
         {
             startupLogger.LogWarning("Database not ready (attempt {Attempt}/12): {Message}", attempt, exception.Message);
             await Task.Delay(TimeSpan.FromSeconds(5));

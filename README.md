@@ -4,7 +4,7 @@
 
 DollarShark is a multi-user personal finance app: import bank and credit card statements, catch duplicates, link transfers, auto-categorize spending and see where your money goes. Each user's data is private to their account; read-only default categories are shared.
 
-**Stack:** ASP.NET Core (.NET 10) API · EF Core + SQL Server · React 19 + TypeScript + Vite · xUnit tests · GitHub Actions CI.
+**Stack:** ASP.NET Core (.NET 10) API · EF Core + PostgreSQL · React 19 + TypeScript + Vite · xUnit tests · GitHub Actions CI.
 
 ## Features
 
@@ -28,14 +28,20 @@ DollarShark is a multi-user personal finance app: import bank and credit card st
 
 - .NET 10 SDK
 - Node.js 20.19 or newer and npm (Node 22 LTS or newer recommended)
-- SQL Server Developer Edition running locally
+- Docker Desktop (runs the PostgreSQL database locally)
 
-## Database setup and existing data
+## Database setup (PostgreSQL)
 
-Set the SQL Server connection string in .NET User Secrets. Replace YOUR_SERVER\YOUR_INSTANCE with the server/instance shown by your SQL Server connection:
+Start a local PostgreSQL 17 for development (once; it restarts with Docker Desktop). Pick your own dev password:
 
 ~~~powershell
-dotnet user-secrets set "ConnectionStrings:FinanceDb" "Server=YOUR_SERVER\YOUR_INSTANCE;Database=DollarShark;Trusted_Connection=True;TrustServerCertificate=True;" --project backend/DollarShark.Api
+docker run -d --name dollarshark-pg-dev --restart unless-stopped -e POSTGRES_DB=dollarshark -e POSTGRES_USER=dollarshark -e POSTGRES_PASSWORD=your-dev-password -p 127.0.0.1:5432:5432 -v dollarshark-pg-dev:/var/lib/postgresql/data postgres:17-alpine
+~~~
+
+Point the API at it with .NET User Secrets:
+
+~~~powershell
+dotnet user-secrets set "ConnectionStrings:FinanceDb" "Host=localhost;Port=5432;Database=dollarshark;Username=dollarshark;Password=your-dev-password;GSS Encryption Mode=Disable" --project backend/DollarShark.Api
 ~~~
 
 Apply the checked-in migrations explicitly, and again whenever you pull changes that add a migration. Migrations preserve existing tables and rows.
@@ -44,9 +50,9 @@ Apply the checked-in migrations explicitly, and again whenever you pull changes 
 .\.tools\dotnet-ef.exe database update --project backend/DollarShark.Infrastructure --startup-project backend/DollarShark.Api
 ~~~
 
-The API does not update the database automatically. After migration, start the app and register your first user.
+The API does not update the database automatically in development (Docker deployments opt in with `Database:MigrateOnStartup`). After migration, start the app and register your first user. To browse the data, connect any PostgreSQL client (pgAdmin, DBeaver, VS Code's PostgreSQL extension) to `localhost:5432`.
 
-**Upgrading a very old (pre-authentication) database:** finance rows created before user accounts existed have no owner and stay hidden. To assign them to a user, open `docs/phase-2-5-backfill.sql` in VS Code with the MSSQL extension, replace the placeholder email, select the intended SQL Server connection/database, and run it. The script changes only rows whose `UserId` is null, leaves shared default categories unowned, and reports how many legacy records it assigned. Inspect the email and selected database before running the script. A fresh database has no legacy finance rows, so no backfill is needed.
+The database moved from SQL Server to PostgreSQL in November 2026; the migrations were recreated from scratch, so older SQL Server databases are not upgraded — start with a fresh PostgreSQL database.
 
 ## Run from Visual Studio
 
@@ -54,7 +60,7 @@ Open backend/DollarShark.sln, select the DollarShark Full Stack launch profile, 
 
 ## Run with Docker (production-like)
 
-Runs the whole app — SQL Server Express, API and website — in containers, exactly as on the server:
+Runs the whole app — PostgreSQL, API and website — in containers, exactly as on the server:
 
 ~~~powershell
 copy .env.example .env      # fill in values; the comments show local-test settings
@@ -156,7 +162,7 @@ Unhandled server errors return a ProblemDetails body with a friendly title and a
 - `POST /api/statements` accepts multipart `financialAccountId` and `file` fields. `GET /api/statements?page=1&pageSize=25`, `GET /api/statements/{id}`, and `DELETE /api/statements/{id}` manage the signed-in user's metadata and files. There is no download endpoint.
 - PDF, CSV, and XLSX files are checked by extension and basic file structure; the submitted Content-Type is ignored. The default maximum is 15 MiB (`StatementStorage:MaxFileSizeBytes` can override it).
 - Files are stored outside `wwwroot` under the current user's Local Application Data at `DollarShark/Statements`. Set `StatementStorage:RootPath` to choose another private directory. The API refuses a configured storage location inside the public web root.
-- The app generates random storage keys and stores a SHA-256 hash plus metadata in SQL Server. Failed metadata writes attempt to remove the stored file. Deletes use a retryable `Deleting` status so a failed file or database deletion can be retried.
+- The app generates random storage keys and stores a SHA-256 hash plus metadata in the database. Failed metadata writes attempt to remove the stored file. Deletes use a retryable `Deleting` status so a failed file or database deletion can be retried.
 - Uploads are not parsed automatically. CSV files can be preview-parsed on demand; previews do not create transactions. Files are never served by the API.
 - Local storage is private to the operating-system account running the API, but files are not encrypted or malware-scanned by this milestone. Configure restrictive filesystem permissions, backups, and a trusted private volume before using real statements.
 
@@ -169,8 +175,6 @@ Unhandled server errors return a ProblemDetails body with a friendly title and a
 - PDF and XLSX uploads remain stored but cannot be preview-parsed. CSV previews are temporary responses; they are not persisted.
 
 Before exposing the app publicly, follow [docs/deployment.md](docs/deployment.md) (HTTPS, persistent data-protection keys, exact frontend origin, real email, backups and monitoring).
-
-To create optional demo data for your own account, replace the email placeholder in `docs/sample-data.sql` with the email you registered, then run the script against the DollarShark database. It adds a sample account, private category, and three transactions; rerunning it does not duplicate those sample transactions.
 
 ## Auto-categorization rules
 
@@ -229,7 +233,7 @@ From frontend:
 npm run build
 ~~~
 
-The tests use SQLite in-memory relational databases for integration behavior. They do not apply migrations to or modify your SQL Server database.
+The tests use SQLite in-memory relational databases for integration behavior. They do not touch your development database.
 
 ## Data conventions and scope
 

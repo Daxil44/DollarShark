@@ -7,7 +7,7 @@ flowchart LR
     U["Browsers"] -- "HTTPS 443" --> W
     subgraph LS["AWS Lightsail · Ubuntu 24.04"]
         W["web · Caddy<br/>React app + automatic HTTPS"] -- "/api" --> A["api · ASP.NET Core"]
-        A --> D[("db · SQL Server Express<br/>private, no public port")]
+        A --> D[("db · PostgreSQL 17<br/>private, no public port")]
         A --> V[("volumes: db · login keys · statements · certificates")]
     end
     A -. SMTP .-> M["Gmail"]
@@ -40,7 +40,7 @@ Open http://localhost:8088. Emails (confirmation, password reset) appear in Mail
 
 1. Open **Lightsail** → **Create instance**.
 2. Region: closest to your users (e.g. *Canada (Central)*). Platform **Linux/Unix** → **OS Only** → **Ubuntu 24.04 LTS**.
-3. Plan: **at least 2 GB RAM** (SQL Server needs it); 4 GB is smoother. Name it `dollarshark` → **Create**.
+3. Plan: **1 GB RAM ($7/month)** is enough with PostgreSQL; 2 GB is smoother. (On the AWS Free plan only small sizes are allowed — if 1 GB is refused, the 512 MB plan can run the app too, but builds are slow.) Name it `dollarshark` → **Create**.
 4. **Networking** tab of the instance:
    - **Create static IP** and attach it (the address never changes).
    - **IPv4 firewall**: keep SSH (22), keep HTTP (80), **add HTTPS (443)**. Nothing else.
@@ -131,7 +131,7 @@ In the Lightsail firewall add **TCP 9443 restricted to your own IP**, then open 
 ## Go-live checklist
 
 - [ ] Budget alert set; root account has MFA.
-- [ ] Only ports 22, 80, 443 open; SQL Server has no public port.
+- [ ] Only ports 22, 80, 443 open; the database has no public port.
 - [ ] `https://` works and `http://` redirects to it.
 - [ ] Sign up with a new email → confirmation email arrives → sign in. Password reset works.
 - [ ] Restart (`docker compose restart`) and confirm you are still signed in.
