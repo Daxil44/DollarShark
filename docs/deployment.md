@@ -19,6 +19,7 @@ flowchart LR
 | `.env.example` | Template for your secrets → copy to `.env` (never committed) |
 | `backend/Dockerfile` | Builds and runs the API (non-root, port 8080) |
 | `frontend/Dockerfile` + `frontend/Caddyfile` | Builds the React app and serves it with Caddy, which proxies `/api` and gets HTTPS certificates automatically |
+| `backup/` | Nightly encrypted backups (database + statement files) to the server and S3, plus restore tools (section 7) |
 
 The API applies database migrations itself on startup (`Database__MigrateOnStartup=true` in compose), so a deploy is just `docker compose up -d --build`.
 
@@ -116,8 +117,96 @@ Open **https://dollarshark.duckdns.org** 🎉 — Caddy fetches the HTTPS certif
 | Restart everything | `docker compose restart` |
 | Stop (data kept) | `docker compose down` |
 | Disk usage / cleanup | `docker system df` · `docker image prune -f` |
+| Backup now / restore test | `docker compose exec backup backup.sh` · `docker compose exec backup restore.sh test` |
 
 ⚠️ Never run `docker compose down -v` on the server — `-v` deletes the volumes, i.e. **all data and login keys**.
+
+## 7. Backups
+
+Two layers. Both cost pennies and come out of your AWS credits:
+
+| Layer | What it saves | Protects against |
+|---|---|---|
+| **`backup` container** (in `docker-compose.yml`) | Every night: the database (`pg_dump`) + uploaded statement files, **encrypted** (AES-256), kept on the server (newest 7) **and** in a private S3 bucket (30 days) | A bad update, a deleted account by mistake, a dead server |
+| **Lightsail automatic snapshots** | A daily copy of the whole server disk | The server breaking completely; quickest way back |
+
+### 7a. Lightsail automatic snapshots (1 minute)
+
+Lightsail → your instance → **Snapshots** tab → **Automatic snapshots** → **Enable**. Lightsail keeps the last 7 (about $0.05 per GB per month).
+
+### 7b. S3 bucket (AWS console, ~10 minutes)
+
+1. **S3 → Create bucket**
+   - Region: **US East (Ohio) us-east-2**, the same as the server.
+   - Name: globally unique, e.g. `dollarshark-backups-7k2q` (lowercase, add a few random characters).
+   - **Block all public access: ON** (default). **Bucket Versioning: Enable**. Default encryption: SSE-S3 (default).
+   - **Create bucket**.
+2. Open the bucket → **Management → Create lifecycle rule**
+   - Name `expire-old-backups`, scope **Apply to all objects** (tick the acknowledgement).
+   - Tick **Expire current versions of objects** → **30** days.
+   - Tick **Permanently delete noncurrent versions of objects** → **7** days.
+   - Tick **Delete expired object delete markers or incomplete multipart uploads** → incomplete uploads after **1** day.
+   - **Create rule**.
+3. **IAM → Users → Create user** `dollarshark-backup`. Don't give it console access, and skip permissions on the first screen. Then **Create user**.
+4. Open the user → **Add permissions → Create inline policy → JSON**. Paste this, replacing `YOUR-BUCKET` twice:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       { "Sid": "ListBackups", "Effect": "Allow", "Action": "s3:ListBucket",
+         "Resource": "arn:aws:s3:::YOUR-BUCKET" },
+       { "Sid": "ReadWriteBackups", "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"],
+         "Resource": "arn:aws:s3:::YOUR-BUCKET/backups/*" }
+     ]
+   }
+   ```
+
+   Name it `dollarshark-backup-s3` → **Create policy**. The key can add and read backups in this one bucket, but **it can't delete anything**. Versioning keeps the old copy if a file is ever overwritten. So even a hacked server can't wipe your backups.
+5. User → **Security credentials → Create access key** → choose **Application running outside AWS** → **Create**. Keep that page open: the secret is shown **only once**. Never paste it into chat or screenshots.
+
+### 7c. Turn it on (server SSH)
+
+```bash
+cd ~/DollarShark && git pull
+# Adds the backup settings with a random encryption passphrase:
+cat >> .env <<EOF
+
+BACKUP_PASSPHRASE=$(openssl rand -base64 32)
+BACKUP_TIME_UTC=08:00
+BACKUP_KEEP_LOCAL=7
+BACKUP_S3_BUCKET=YOUR-BUCKET
+BACKUP_AWS_REGION=us-east-2
+BACKUP_AWS_ACCESS_KEY_ID=
+BACKUP_AWS_SECRET_ACCESS_KEY=
+EOF
+nano .env     # fill in YOUR-BUCKET and the two access-key values at the bottom; save Ctrl+O Enter, exit Ctrl+X
+grep BACKUP_PASSPHRASE .env
+```
+
+⚠️ **Copy the `BACKUP_PASSPHRASE` value into your password manager now.** Backups are encrypted with it. If the server dies and you no longer have the passphrase, the backups can't be opened.
+
+```bash
+docker compose up -d --build
+docker compose logs backup      # expect "Saved /backups/..." and "Uploaded to s3://..."
+```
+
+The first backup runs right away, then every night at 08:00 UTC (3–4 am Toronto time). You'll see the file in the S3 console under `backups/`. `docker compose ps` shows the backup container as **unhealthy** if no backup has succeeded in the last 26 hours; when that happens, read `docker compose logs backup`.
+
+### 7d. Restore
+
+| Task | Command (on the server, in `~/DollarShark`) |
+|---|---|
+| Back up right now (e.g. before a risky update) | `docker compose exec backup backup.sh` |
+| List backups (server + S3) | `docker compose exec backup restore.sh list` |
+| **Restore test**: safe and no downtime. Restores into a throwaway database, compares row counts, then deletes it | `docker compose exec backup restore.sh test` (newest) or `... test dollarshark-20261122-080000.tar.gpg` |
+| **Real restore**: replaces ALL live data | `docker compose stop api` → `docker compose exec backup restore.sh restore NAME --yes` → `docker compose start api` |
+
+A real restore first saves the current data as `before-restore-*.tar.gpg`, so a restore can itself be undone. Backups that are no longer on the server are downloaded from S3 automatically.
+
+**New server from scratch:** set up the server (sections 3–6) with the **same** `.env` values (`DB_PASSWORD`, `BACKUP_*`), run `docker compose up -d --build`, then do the real restore with a name from `restore.sh list`. Users will need to sign in again: login keys aren't part of the backup.
+
+Practise the restore test once a month. A backup you've never restored is only a hope.
 
 ## Optional: Portainer (web UI for Docker)
 
@@ -136,7 +225,7 @@ In the Lightsail firewall add **TCP 9443 restricted to your own IP**, then open 
 - [ ] Sign up with a new email → confirmation email arrives → sign in. Password reset works.
 - [ ] Restart (`docker compose restart`) and confirm you are still signed in.
 - [ ] Two accounts can't see each other's data; upload + import a statement; delete a test account.
-- [ ] Automatic snapshots on (Stage 7 adds S3 database backups and a restore test).
+- [ ] Automatic snapshots on; nightly backups reach S3; `restore.sh test` passes; backup passphrase saved in a password manager.
 - [ ] Privacy note: backups taken before an account deletion expire on their own schedule.
 
 ## Configuration reference
