@@ -69,6 +69,8 @@ docker compose --profile local up -d --build
 
 Open http://localhost:8088 (emails land in Mailpit at http://localhost:8025). Deploying to AWS Lightsail: see [docs/deployment.md](docs/deployment.md).
 
+A `backup` container takes an encrypted backup of the database and statement files every night. The newest 7 stay in the `backups` volume, plus an off-server copy in S3 when `BACKUP_S3_BUCKET` is set. It includes a safe restore test (`docker compose exec backup restore.sh test`). Setup and restore steps: [docs/deployment.md → Backups](docs/deployment.md#7-backups).
+
 ## Run from a terminal
 
 From the repository root, run the API using its Development launch profile. The SPA proxy starts the Vite development server, so do not start another npm run dev process at the same time.

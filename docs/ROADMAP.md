@@ -98,10 +98,11 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 
 ### Stage 7 — AWS S3 and backups *(hosting Phase 5)*
 
-- [ ] Private S3 bucket with least-privilege IAM permissions
-- [ ] Store statement uploads in S3 (new `IStatementStorage` implementation)
-- [ ] Encrypted, scheduled database backups to S3
-- [ ] Test database restoration
+- [x] Encrypted, scheduled backups: `backup` container, nightly `pg_dump` + statement files, AES-256 (gpg), newest 7 on the server, `restore.sh list / test / restore`
+- [ ] Private S3 bucket (versioning, 30-day lifecycle) + IAM user that can add/read but not delete backups: AWS console steps in `docs/deployment.md` § 7
+- [ ] Lightsail automatic snapshots on
+- [ ] Restore test on the live server (`docker compose exec backup restore.sh test`)
+- [ ] *Later (optional):* store statement uploads in S3 directly (new `IStatementStorage`); not needed for safety, since the nightly backup already includes the files
 
 **Done when:** a test database has been deleted and restored from backup.
 
@@ -133,6 +134,7 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 - [ ] Export to CSV
 - [ ] Smaller page download (load chart code only on the Dashboard)
 - [ ] Production logging without SQL text or personal data
+- [ ] Cloudflare Web Analytics: privacy-friendly visitor stats (page views, countries, devices) — free, no cookies, so no consent banner; add the beacon script to `frontend/index.html` with the site token
 
 ### Stage 11 — Smarter imports
 - [ ] More statement formats: TD, RBC, CIBC, BMO

@@ -1,7 +1,7 @@
 # DollarShark: the whole app in one command.
 #   1. cp .env.example .env   and fill it in
 #   2. docker compose up -d --build
-# Services: db (PostgreSQL, private) · api (ASP.NET Core) · web (React + Caddy, the only public one)
+# Services: db (PostgreSQL, private) · api (ASP.NET Core) · web (React + Caddy, the only public one) · backup (nightly, encrypted)
 name: dollarshark
 
 services:
@@ -65,6 +65,38 @@ services:
       - caddy-data:/data      # HTTPS certificates — keep this volume!
       - caddy-config:/config
 
+  # Nightly encrypted backups of the database + statement files (to the "backups" volume and, if configured, S3).
+  # Restore tools: docker compose exec backup restore.sh   (see docs/deployment.md → Backups)
+  backup:
+    build: ./backup
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: dollarshark
+      PGPASSWORD: ${DB_PASSWORD}
+      PGDATABASE: dollarshark
+      PGGSSENCMODE: disable
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-}
+      BACKUP_TIME_UTC: ${BACKUP_TIME_UTC:-08:00}
+      BACKUP_KEEP_LOCAL: ${BACKUP_KEEP_LOCAL:-7}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${BACKUP_AWS_REGION:-us-east-2}
+    volumes:
+      - backups:/backups
+      - api-statements:/statements
+    # "unhealthy" in `docker compose ps` = no successful backup in the last 26 hours → check `docker compose logs backup`
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /backups/.last-success 2>/dev/null || echo 0) )) -lt 93600"]
+      interval: 10m
+      timeout: 10s
+      start_period: 5m
+
   # Local testing only (docker compose --profile local up): catches all emails in a web inbox at http://localhost:8025
   mailpit:
     image: axllent/mailpit:latest
@@ -79,3 +111,4 @@ volumes:
   api-statements:
   caddy-data:
   caddy-config:
+  backups:
