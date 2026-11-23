@@ -89,7 +89,7 @@ jobs:
     name: Deploy to Lightsail
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20   # image download + up to 5 min health check (+ 5 more if it has to roll back)
     environment:
       name: production
       url: https://dollarshark.ca

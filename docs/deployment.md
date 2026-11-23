@@ -274,7 +274,7 @@ Then, once, make the images public so the server can also pull them **by hand** 
 | Redeploy from GitHub | Actions → **Deploy** → **Run workflow** |
 | Old way, build on the server (if GitHub is down) | `git pull && docker compose up -d --build` |
 
-`deploy.sh` checks `/health` for up to 2 minutes after every deploy. If the new build is unhealthy, it shows the API logs and **switches back to the previous build automatically**, and the GitHub run turns red so you notice. Images older than 7 days are cleaned up to save disk space.
+`deploy.sh` checks `/health` for up to 5 minutes after every deploy (a 512 MB server can need over 2 minutes to start .NET right after pulling new images; change it with `HEALTH_TIMEOUT=600 sh deploy.sh`). If the new build is unhealthy, it shows the API logs and **switches back to the previous build automatically**, and the GitHub run turns red so you notice. Images older than 7 days are cleaned up to save disk space.
 
 ⚠️ The database migrates forward when a new build starts. Rolling back is safe while migrations only *add* things (new tables or columns). Before a migration that renames or deletes columns, take a backup first: `docker compose exec backup backup.sh`.
 

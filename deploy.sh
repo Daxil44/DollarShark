@@ -34,14 +34,19 @@ set_tag() {
     fi
 }
 
-healthy() { # for up to 2 minutes: the api must answer /health (checked from inside the web container)
-    deadline=$(( $(date +%s) + 120 ))
-    while [ "$(date +%s)" -lt "$deadline" ]; do
+# The api must answer /health (checked from inside the web container) within HEALTH_TIMEOUT seconds.
+# 5 minutes by default: on a 512 MB server, .NET can take over 2 minutes to start right after new images are pulled.
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-300}"
+healthy() {
+    started=$(date +%s)
+    while [ $(( $(date +%s) - started )) -lt "$HEALTH_TIMEOUT" ]; do
         if docker compose exec -T web wget -q -T 5 -O- http://api:8080/health 2>/dev/null | grep -q healthy; then
+            echo "    healthy after $(( $(date +%s) - started ))s"
             return 0
         fi
-        sleep 3
+        sleep 5
     done
+    echo "    no healthy answer within ${HEALTH_TIMEOUT}s"
     return 1
 }
 
