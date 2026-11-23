@@ -227,6 +227,8 @@ Images are built on GitHub's machines, so the server no longer does 10-minute bu
 The key can do **one thing only**: `git pull && sh deploy.sh`. Even if it ever leaked, it couldn't open a shell on your server.
 
 ```bash
+sed -i '/ github-deploy$/d' ~/.ssh/authorized_keys     # remove older deploy keys (only lines ending in "github-deploy")
+rm -f ~/github-deploy ~/github-deploy.pub
 ssh-keygen -t ed25519 -N "" -C github-deploy -f ~/github-deploy
 echo "command=\"cd /home/ubuntu/DollarShark && git pull --ff-only --quiet && sh deploy.sh\",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty $(cat ~/github-deploy.pub)" >> ~/.ssh/authorized_keys
 ```
@@ -235,8 +237,10 @@ Print the two values GitHub needs:
 
 ```bash
 ssh-keyscan -t ed25519 localhost 2>/dev/null | sed "s/^localhost/3.146.186.253/"    # server's PUBLIC host key
-cat ~/github-deploy                                                                  # PRIVATE deploy key
+base64 -w0 ~/github-deploy; echo                                                     # PRIVATE deploy key, as ONE line
 ```
+
+The private key is printed as one long line on purpose: copying several lines from the browser terminal can add hidden spaces and break the key. **Never screenshot or share it.** If it is ever exposed, run this block again to replace it.
 
 ### 8b. GitHub secrets
 
@@ -246,7 +250,7 @@ GitHub → the DollarShark repo → **Settings → Secrets and variables → Act
 |---|---|
 | `DEPLOY_HOST` | `3.146.186.253` |
 | `DEPLOY_KNOWN_HOSTS` | the line printed by `ssh-keyscan` (starts with `3.146.186.253 ssh-ed25519 …`) |
-| `DEPLOY_SSH_KEY` | everything printed by `cat ~/github-deploy`, **including** the `-----BEGIN…` and `-----END…` lines |
+| `DEPLOY_SSH_KEY` | the long line printed by `base64 -w0 ~/github-deploy` (the usual `-----BEGIN…` block works too) |
 
 Then delete the private key from the server. GitHub has the only copy now, and the server only needs the public half that's already in `authorized_keys`:
 
