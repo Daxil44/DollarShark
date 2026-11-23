@@ -78,19 +78,20 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 
 - [ ] Create AWS account and a billing budget alert (e.g. $5/month)
 - [ ] Understand IAM; use an IAM user/role instead of the root account
-- [ ] Create a Lightsail Ubuntu instance (1 GB RAM is enough with PostgreSQL; 2 GB is smoother)
-- [ ] Static IP, SSH key access, firewall (only 22, 80, 443)
+- [x] Create a Lightsail Ubuntu instance ($5 / 512 MB + 2 GB swap in Ohio: the AWS Free plan blocks bigger sizes)
+- [x] Static IP, SSH key access, firewall (only 22, 80, 443)
 - [ ] Basic Linux server administration
-- [ ] Install Docker and Docker Compose
+- [x] Install Docker and Docker Compose
+- [ ] MFA on the AWS root account
 
 **Done when:** you can SSH in and run `docker --version`.
 
 ### Stage 6 — Deploy DollarShark *(hosting Phase 4)*
 
-- [ ] Deploy the containers
-- [ ] Configure Nginx
-- [ ] Domain name and HTTPS (Let's Encrypt)
-- [ ] Email provider: Gmail App Password or Amazon SES
+- [x] Deploy the containers — live at https://dollarshark.ca
+- [x] ~~Configure Nginx~~ Caddy does this (reverse proxy + automatic HTTPS)
+- [x] Domain name and HTTPS: `dollarshark.ca` (GoDaddy, renews Nov 2027), Let's Encrypt via Caddy
+- [x] Email provider: Gmail App Password
 - [ ] Turn on Continue with Google with the production redirect URI
 - [ ] Test registration, email confirmation, login and transactions
 
@@ -99,20 +100,22 @@ Suggested PRs: (1) production setup + error handling + upload limit → (2) CI �
 ### Stage 7 — AWS S3 and backups *(hosting Phase 5)*
 
 - [x] Encrypted, scheduled backups: `backup` container, nightly `pg_dump` + statement files, AES-256 (gpg), newest 7 on the server, `restore.sh list / test / restore`
-- [ ] Private S3 bucket (versioning, 30-day lifecycle) + IAM user that can add/read but not delete backups: AWS console steps in `docs/deployment.md` § 7
-- [ ] Lightsail automatic snapshots on
-- [ ] Restore test on the live server (`docker compose exec backup restore.sh test`)
+- [x] Private S3 bucket `dollarshark-backups` (versioning, 30-day lifecycle) + IAM user `dollarshark-backup` that can add/read but not delete backups: AWS console steps in `docs/deployment.md` § 7
+- [x] Lightsail automatic snapshots on (daily, last 7 kept)
+- [x] Restore test on the live server (`docker compose exec backup restore.sh test`) — passed 2026-11-22
 - [ ] *Later (optional):* store statement uploads in S3 directly (new `IStatementStorage`); not needed for safety, since the nightly backup already includes the files
 
 **Done when:** a test database has been deleted and restored from backup.
 
 ### Stage 8 — Continuous deployment *(hosting Phase 6)*
 
-- [ ] Build Docker images automatically
-- [ ] Push images to a registry
-- [ ] Deploy changes to Lightsail
-- [ ] Deployment health checks (`/health`)
-- [ ] Rollback procedure
+- [x] Build Docker images automatically (`.github/workflows/deploy.yml`, runs after CI passes on `main`)
+- [x] Push images to a registry (ghcr.io, tagged with the commit id + `latest`)
+- [x] Deploy changes to Lightsail (SSH key that may only run `git pull && sh deploy.sh`)
+- [x] Deployment health checks (`/health`) with automatic rollback (`deploy.sh`)
+- [x] Rollback procedure: `sh deploy.sh <commit-id>` (docs/deployment.md § 8d)
+- [ ] One-time setup: deploy key + 3 GitHub secrets, first automatic deploy, images made public
+- [ ] Practise a rollback on the live server
 
 **Done when:** merging to `main` deploys automatically and a rollback has been practised.
 

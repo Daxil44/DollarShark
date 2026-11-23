@@ -23,6 +23,9 @@ services:
       start_period: 20s
 
   api:
+    # On the server, deploy.sh pulls this image from GitHub's registry (built by .github/workflows/deploy.yml).
+    # Locally, "docker compose up --build" builds it from ./backend instead.
+    image: ${IMAGE_PREFIX:-ghcr.io/daxil44/dollarshark}-api:${IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
     depends_on:
@@ -52,6 +55,7 @@ services:
       - api-statements:/app/statements
 
   web:
+    image: ${IMAGE_PREFIX:-ghcr.io/daxil44/dollarshark}-web:${IMAGE_TAG:-latest}
     build: ./frontend
     restart: unless-stopped
     depends_on:
@@ -68,6 +72,7 @@ services:
   # Nightly encrypted backups of the database + statement files (to the "backups" volume and, if configured, S3).
   # Restore tools: docker compose exec backup restore.sh   (see docs/deployment.md → Backups)
   backup:
+    image: ${IMAGE_PREFIX:-ghcr.io/daxil44/dollarshark}-backup:${IMAGE_TAG:-latest}
     build: ./backup
     restart: unless-stopped
     init: true

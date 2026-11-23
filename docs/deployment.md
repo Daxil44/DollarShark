@@ -111,7 +111,8 @@ Open **https://dollarshark.duckdns.org** 🎉 — Caddy fetches the HTTPS certif
 
 | Task | Command |
 |---|---|
-| Deploy the latest code | `cd ~/DollarShark && git pull && docker compose up -d --build` |
+| Deploy the latest code | Automatic when a PR merges (section 8). By hand: `cd ~/DollarShark && git pull && sh deploy.sh` |
+| Roll back | `sh deploy.sh <commit-id>` |
 | See status | `docker compose ps` |
 | Logs | `docker compose logs -f api` (or `web`, `db`) |
 | Restart everything | `docker compose restart` |
@@ -207,6 +208,71 @@ A real restore first saves the current data as `before-restore-*.tar.gpg`, so a 
 **New server from scratch:** set up the server (sections 3–6) with the **same** `.env` values (`DB_PASSWORD`, `BACKUP_*`), run `docker compose up -d --build`, then do the real restore with a name from `restore.sh list`. Users will need to sign in again: login keys aren't part of the backup.
 
 Practise the restore test once a month. A backup you've never restored is only a hope.
+
+## 8. Automatic deployment (GitHub Actions)
+
+After this setup, **merging a PR into `main` updates the live site by itself**:
+
+```mermaid
+flowchart LR
+    M["PR merged"] --> CI["CI<br/>tests + lint"] --> B["Deploy workflow<br/>builds 3 images"] --> R[("ghcr.io<br/>image registry")]
+    B -- "SSH: git pull && sh deploy.sh" --> S["Lightsail<br/>pull images → restart → /health"]
+    S -- "unhealthy?" --> RB["automatic rollback<br/>to the previous build"]
+```
+
+Images are built on GitHub's machines, so the server no longer does 10-minute builds. Each image is tagged with its **commit id** (e.g. `1a2b3c4`), which is also how you roll back.
+
+### 8a. A deploy key on the server (browser SSH)
+
+The key can do **one thing only**: `git pull && sh deploy.sh`. Even if it ever leaked, it couldn't open a shell on your server.
+
+```bash
+ssh-keygen -t ed25519 -N "" -C github-deploy -f ~/github-deploy
+echo "command=\"cd /home/ubuntu/DollarShark && git pull --ff-only --quiet && sh deploy.sh\",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty $(cat ~/github-deploy.pub)" >> ~/.ssh/authorized_keys
+```
+
+Print the two values GitHub needs:
+
+```bash
+ssh-keyscan -t ed25519 localhost 2>/dev/null | sed "s/^localhost/3.146.186.253/"    # server's PUBLIC host key
+cat ~/github-deploy                                                                  # PRIVATE deploy key
+```
+
+### 8b. GitHub secrets
+
+GitHub → the DollarShark repo → **Settings → Secrets and variables → Actions → New repository secret**, three times:
+
+| Name | Value |
+|---|---|
+| `DEPLOY_HOST` | `3.146.186.253` |
+| `DEPLOY_KNOWN_HOSTS` | the line printed by `ssh-keyscan` (starts with `3.146.186.253 ssh-ed25519 …`) |
+| `DEPLOY_SSH_KEY` | everything printed by `cat ~/github-deploy`, **including** the `-----BEGIN…` and `-----END…` lines |
+
+Then delete the private key from the server. GitHub has the only copy now, and the server only needs the public half that's already in `authorized_keys`:
+
+```bash
+rm ~/github-deploy ~/github-deploy.pub
+```
+
+### 8c. First run
+
+Merge the PR that adds `.github/workflows/deploy.yml`. In GitHub → **Actions** you'll see **CI** run, then **Deploy**: *Build api / web / backup image* → *Deploy to Lightsail*. The first build takes ~5–10 minutes; later ones reuse cached layers.
+
+Then, once, make the images public so the server can also pull them **by hand** (for rollbacks): GitHub → your profile → **Packages** → `dollarshark-api` → **Package settings → Change visibility → Public**. Do the same for `dollarshark-web` and `dollarshark-backup`. They contain only the open-source app; all secrets live in the server's `.env`.
+
+### 8d. Rollback and manual deploys (server)
+
+| Task | Command (in `~/DollarShark`) |
+|---|---|
+| Which build is live? | `grep IMAGE_TAG .env` |
+| **Roll back** to an earlier build | `sh deploy.sh 1a2b3c4` (commit id from GitHub → Commits, or from a Deploy run) |
+| Deploy the newest build by hand | `git pull && sh deploy.sh` |
+| Redeploy from GitHub | Actions → **Deploy** → **Run workflow** |
+| Old way, build on the server (if GitHub is down) | `git pull && docker compose up -d --build` |
+
+`deploy.sh` checks `/health` for up to 2 minutes after every deploy. If the new build is unhealthy, it shows the API logs and **switches back to the previous build automatically**, and the GitHub run turns red so you notice. Images older than 7 days are cleaned up to save disk space.
+
+⚠️ The database migrates forward when a new build starts. Rolling back is safe while migrations only *add* things (new tables or columns). Before a migration that renames or deletes columns, take a backup first: `docker compose exec backup backup.sh`.
 
 ## Optional: Portainer (web UI for Docker)
 
